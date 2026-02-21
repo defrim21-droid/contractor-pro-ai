@@ -1,11 +1,13 @@
 import sharp from 'sharp';
 import { fal } from '@fal-ai/client';
+import Replicate from 'replicate';
 import { buildPrompt, COLOR_NAMES } from './prompt.js';
 import { supabase } from './supabase.js';
 
 const OPENAI_EDITS_URL = 'https://api.openai.com/v1/images/edits';
 const BUCKET = 'project-images-public';
 const FAL_MAX_DIMENSION = 1536;
+const FAL_ALIGN = 8; // FLUX requires dimensions divisible by 8
 
 async function resolveMaskToBuffer(maskInput: string): Promise<Buffer> {
   if (maskInput.startsWith('http://') || maskInput.startsWith('https://')) {
@@ -14,6 +16,39 @@ async function resolveMaskToBuffer(maskInput: string): Promise<Buffer> {
   }
   const base64 = maskInput.replace(/^data:image\/\w+;base64,/, '');
   return Buffer.from(base64, 'base64');
+}
+
+/** Create markup image for Nano Banana: base image + red overlay where mask says edit. */
+async function createMarkupImage(
+  baseImageUrl: string,
+  maskInput: string,
+  width: number,
+  height: number
+): Promise<Buffer> {
+  const [baseBuffer, maskBuffer] = await Promise.all([
+    resolveMaskToBuffer(baseImageUrl),
+    (async () => {
+      const buf = await resolveMaskToBuffer(maskInput);
+      const resized = await sharp(buf).resize(width, height).ensureAlpha().raw().toBuffer({ resolveWithObject: true });
+      return resized;
+    })(),
+  ]);
+
+  const base = await sharp(baseBuffer).resize(width, height).ensureAlpha().raw().toBuffer({ resolveWithObject: true });
+  const { data: baseData } = base;
+  const { data: maskData } = maskBuffer;
+
+  // Red overlay where mask is transparent (alpha < 128 = edit area) — Nano Banana expects red marks
+  for (let i = 0; i < baseData.length; i += 4) {
+    const maskA = maskData[i + 3] ?? 255;
+    if (maskA < 128) {
+      baseData[i] = 255;
+      baseData[i + 1] = 0;
+      baseData[i + 2] = 0;
+    }
+  }
+
+  return sharp(baseData, { raw: { width, height, channels: 4 } }).png().toBuffer();
 }
 
 /** Fal.ai mask: white = inpaint, black = preserve. Our mask: transparent = edit, opaque = preserve. Returns PNG buffer. */
@@ -113,18 +148,31 @@ async function runEdit(
   return `data:image/png;base64,${b64}`;
 }
 
-/** Resize image to fit within max dimension; return buffer and final dimensions. */
-async function resizeImageForFal(imageUrl: string): Promise<{ buffer: Buffer; w: number; h: number }> {
+/** Resize image to fit within max dimension; align to FAL_ALIGN (FLUX requires div-by-8). */
+async function resizeImageForFal(
+  imageUrl: string,
+  targetW?: number,
+  targetH?: number
+): Promise<{ buffer: Buffer; w: number; h: number }> {
   const buffer = await resolveMaskToBuffer(imageUrl);
   const meta = await sharp(buffer).metadata();
-  const w = meta.width ?? 1024;
-  const h = meta.height ?? 1024;
-  const scale =
-    w > FAL_MAX_DIMENSION || h > FAL_MAX_DIMENSION ? FAL_MAX_DIMENSION / Math.max(w, h) : 1;
-  const nw = Math.round(w * scale);
-  const nh = Math.round(h * scale);
-  const resized = scale < 1 ? await sharp(buffer).resize(nw, nh).png().toBuffer() : buffer;
-  return { buffer: resized, w: nw, h: nh };
+  let w = meta.width ?? 1024;
+  let h = meta.height ?? 1024;
+  if (targetW != null && targetH != null) {
+    w = targetW;
+    h = targetH;
+  } else {
+    const scale =
+      w > FAL_MAX_DIMENSION || h > FAL_MAX_DIMENSION ? FAL_MAX_DIMENSION / Math.max(w, h) : 1;
+    w = Math.round(w * scale);
+    h = Math.round(h * scale);
+    w = Math.floor(w / FAL_ALIGN) * FAL_ALIGN;
+    h = Math.floor(h / FAL_ALIGN) * FAL_ALIGN;
+    w = Math.max(FAL_ALIGN, w);
+    h = Math.max(FAL_ALIGN, h);
+  }
+  const resized = await sharp(buffer).resize(w, h).png().toBuffer();
+  return { buffer: resized, w, h };
 }
 
 /** Upload buffer to Fal storage. */
@@ -144,17 +192,14 @@ async function runFalFluxInpaint(
 ): Promise<string> {
   fal.config({ credentials: falKey });
 
-  // Resize input to Fal limits; mask must match resized dimensions
+  // Resize input to Fal limits; mask and reference must match resized dimensions
   const { buffer: inputBuffer, w: targetW, h: targetH } = await resizeImageForFal(inputImageUrl);
   const maskBuffer = await convertMaskToFalFormatBuffer(maskInput, targetW, targetH);
 
-  // Upload all to Fal storage (avoids file_download_error and image_too_large)
-  const [inputImageFalUrl, maskUrl, refUrl] = await Promise.all([
+  // Upload to Fal storage; reference disabled—flux-general inpainting has tensor mismatch with reference_image_url
+  const [inputImageFalUrl, maskUrl] = await Promise.all([
     uploadToFalStorage(falKey, inputBuffer),
     uploadToFalStorage(falKey, maskBuffer),
-    referenceImageUrl?.trim()
-      ? resizeImageForFal(referenceImageUrl).then((r) => uploadToFalStorage(falKey, r.buffer))
-      : Promise.resolve(null),
   ]);
 
   const input: Record<string, unknown> = {
@@ -166,10 +211,8 @@ async function runFalFluxInpaint(
     strength: 0.82,
   };
 
-  if (refUrl) {
-    input.reference_image_url = refUrl;
-    input.reference_strength = 0.7;
-  }
+  // Note: reference_image_url causes "tensor a (8) must match tensor b (2)" in flux-general inpainting.
+  // Rely on prompt describing the material from the reference instead.
 
   let result;
   try {
@@ -197,9 +240,77 @@ async function runFalFluxInpaint(
   return `data:image/png;base64,${b64}`;
 }
 
+/** Replicate Nano Banana Pro — mask + reference image editing. */
+async function runNanoBananaInpaint(
+  replicateToken: string,
+  inputImageUrl: string,
+  maskInput: string,
+  editPrompt: string,
+  referenceImageUrl: string | null,
+  userId: string,
+  projectId: string
+): Promise<string> {
+  const replicate = new Replicate({ auth: replicateToken });
+
+  const dims = await getImageDimensions(inputImageUrl);
+  const markupBuffer = await createMarkupImage(
+    inputImageUrl,
+    maskInput,
+    dims.w,
+    dims.h
+  );
+
+  // Upload markup to Supabase for public URL (Replicate needs fetchable URL)
+  const markupPath = `uploads/${userId}/${projectId}-markup-${Date.now()}.png`;
+  const { error: uploadErr } = await supabase.storage.from(BUCKET).upload(markupPath, markupBuffer, {
+    contentType: 'image/png',
+    upsert: true,
+  });
+  if (uploadErr) throw new Error(`Markup upload failed: ${uploadErr.message}`);
+  const { data: markupUrlData } = supabase.storage.from(BUCKET).getPublicUrl(markupPath);
+  const markupUrl = markupUrlData.publicUrl;
+
+  const imageInput: string[] = [markupUrl];
+  if (referenceImageUrl?.trim()) imageInput.push(referenceImageUrl.trim());
+
+  const refConstraint =
+    'The reference image may contain multiple materials. Use ONLY the specific material the user names (e.g. brick, stucco). Ignore all other materials in the reference. ';
+  const prompt =
+    imageInput.length > 1
+      ? `${refConstraint}Apply the material and style from the second reference image to the red marked areas only. Edit ONLY the red areas—do not modify any other parts of the image. ${editPrompt}`
+      : `Edit only the red marked areas according to the instructions. Do not modify any other parts of the image. ${editPrompt}`;
+
+  const output = await replicate.run('google/nano-banana-pro', {
+    input: {
+      prompt,
+      image_input: imageInput,
+      aspect_ratio: 'match_input_image',
+      output_format: 'png',
+    },
+  });
+
+  let resultUrl: string | undefined;
+  if (typeof output === 'string') resultUrl = output;
+  else if (output && typeof (output as { url: () => string }).url === 'function')
+    resultUrl = (output as { url: () => string }).url();
+  else if (Array.isArray(output) && output[0])
+    resultUrl = typeof output[0] === 'string' ? output[0] : (output[0] as { url?: () => string })?.url?.();
+  else resultUrl = (output as { url?: string })?.url;
+
+  if (!resultUrl || typeof resultUrl !== 'string') {
+    throw new Error('No image in Nano Banana Pro response');
+  }
+
+  const resp = await fetch(resultUrl);
+  const ab = await resp.arrayBuffer();
+  const b64 = Buffer.from(ab).toString('base64');
+  return `data:image/png;base64,${b64}`;
+}
+
 export async function processJob(
   openaiKey: string,
   falKey: string | undefined,
+  replicateKey: string | undefined,
   projectId: string,
   userId: string,
   baseImageUrl: string,
@@ -216,8 +327,9 @@ export async function processJob(
   const hasMask =
     !!(maskImageUrl && typeof maskImageUrl === 'string' && maskImageUrl.trim().length > 0) || maskRegions.length > 0;
 
+  const maskedBackend = replicateKey ? 'Replicate (Nano Banana Pro)' : falKey ? 'Fal' : 'none';
   console.log(
-    `[processJob] project=${projectId} hasMask=${hasMask} maskRegions=${maskRegions.length} maskImageUrl=${!!maskImageUrl} → ${hasMask ? 'Fal' : 'OpenAI'}`
+    `[processJob] project=${projectId} hasMask=${hasMask} maskRegions=${maskRegions.length} maskImageUrl=${!!maskImageUrl} → ${hasMask ? maskedBackend : 'OpenAI'}`
   );
 
   const baseUrl =
@@ -228,8 +340,24 @@ export async function processJob(
   let lastResultB64: string;
 
   if (hasMask) {
-    // Route to Fal.ai SDXL inpainting — strict mask adherence
-    if (!falKey) throw new Error('FAL_KEY required for masked edits. Add FAL_KEY to your environment.');
+    const maskUrl = maskImageUrl?.trim() ?? maskRegions[0]?.mask ?? null;
+    if (!maskUrl) throw new Error('Mask required for masked edit');
+
+    const runMasked = async (
+      imgUrl: string,
+      mask: string,
+      fullPrompt: string,
+      refUrl: string | null
+    ): Promise<string> => {
+      if (replicateKey) {
+        return runNanoBananaInpaint(replicateKey, imgUrl, mask, fullPrompt, refUrl, userId, projectId);
+      }
+      if (falKey) {
+        return runFalFluxInpaint(falKey, imgUrl, mask, fullPrompt, refUrl);
+      }
+      throw new Error('REPLICATE_API_TOKEN or FAL_KEY required for masked edits.');
+    };
+
     if (maskRegions.length > 1) {
       let currentImageUrl = baseUrl;
       for (let i = 0; i < maskRegions.length; i++) {
@@ -242,13 +370,11 @@ export async function processJob(
           colorName,
         });
         const refUrl = samples[region.sampleIndex]?.url?.trim() || null;
-        const dataUrl = await runFalFluxInpaint(falKey, currentImageUrl, region.mask, regionPrompt, refUrl);
+        const dataUrl = await runMasked(currentImageUrl, region.mask, regionPrompt, refUrl);
         currentImageUrl = dataUrl;
       }
       lastResultB64 = currentImageUrl.replace(/^data:image\/\w+;base64,/, '');
     } else {
-      const maskUrl = maskImageUrl?.trim() ?? maskRegions[0]?.mask ?? null;
-      if (!maskUrl) throw new Error('Mask required for masked edit');
       const fullPrompt =
         maskRegions.length === 1
           ? buildPrompt(prompt, projectType, true, {
@@ -261,7 +387,7 @@ export async function processJob(
         maskRegions.length === 1
           ? (samples[maskRegions[0]!.sampleIndex]?.url?.trim() || null)
           : (samples[0]?.url?.trim() || null);
-      const dataUrl = await runFalFluxInpaint(falKey, baseUrl, maskUrl, fullPrompt, refUrl);
+      const dataUrl = await runMasked(baseUrl, maskUrl, fullPrompt, refUrl);
       lastResultB64 = dataUrl.replace(/^data:image\/\w+;base64,/, '');
     }
   } else {

@@ -15,6 +15,7 @@ export const processAiRenovation = async (
   customPrompt,
   existingProjectId = null,
   clientEmail = null,
+  projectType = null,
 ) => {
   try {
     const timestamp = Date.now();
@@ -46,6 +47,7 @@ export const processAiRenovation = async (
       name: projectName,
       address: projectAddress,
       ...(clientEmail !== undefined && { client_email: clientEmail || null }),
+      ...(projectType && { project_type: projectType }),
       mask_url: null,
       swatch_data: swatchData,
       status: 'draft',
@@ -70,6 +72,7 @@ export const processAiRenovation = async (
           name: projectName,
           address: projectAddress,
           client_email: clientEmail || null,
+          project_type: projectType || null,
           original_image_url: originalUrl,
           mask_url: null,
           swatch_data: swatchData,

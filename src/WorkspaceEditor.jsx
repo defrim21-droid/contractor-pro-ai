@@ -339,6 +339,7 @@ export default function WorkspaceEditor({
   const effectiveProjectName = project?.name || projectName || 'Untitled';
   const effectiveProjectAddress = project?.address ?? projectAddress ?? '';
   const effectiveClientEmail = clientEmail || project?.client_email || null;
+  const effectiveProjectType = (projectType || project?.project_type || '').trim();
 
   const handleSaveProject = async () => {
     if (!selectedImage) return toast.error('Please provide a photo.');
@@ -359,6 +360,7 @@ export default function WorkspaceEditor({
         customPrompt,
         project?.id,
         effectiveClientEmail,
+        effectiveProjectType || null,
       );
 
       toast.success('Project saved!');
@@ -424,6 +426,11 @@ export default function WorkspaceEditor({
 
     try {
       // Validate required fields
+      if (!effectiveProjectType) {
+        toast.error('Please select a project type (New build, Existing, or Architectural drawing).');
+        setIsGenerating(false);
+        return;
+      }
       if (!selectedImage) {
         toast.error('Please provide a photo.');
         setIsGenerating(false);
@@ -452,6 +459,7 @@ export default function WorkspaceEditor({
         customPrompt,
         project?.id,
         effectiveClientEmail,
+        effectiveProjectType || null,
       );
 
       const projectId = newProject.id;
@@ -755,10 +763,12 @@ export default function WorkspaceEditor({
             <button
               type="button"
               onClick={handleGenerateAI}
-              disabled={isGenerating || !(customPrompt || '').trim() || (hasBrushStrokes() && brushMode)}
+              disabled={isGenerating || !effectiveProjectType || !(customPrompt || '').trim() || (hasBrushStrokes() && brushMode)}
               title={
                 hasBrushStrokes() && brushMode
                   ? 'Click Done to finish brush strokes before rendering'
+                  : !effectiveProjectType
+                  ? 'Select a project type (New build, Existing, or Architectural drawing)'
                   : !(customPrompt || '').trim()
                   ? 'Enter instructions to render'
                   : undefined
@@ -928,8 +938,24 @@ export default function WorkspaceEditor({
           )}
         </div>
 
-        {/* Bottom panel: Reference samples + Instructions */}
+        {/* Bottom panel: Project type + Reference samples + Instructions */}
         <div className="card-modern p-6 space-y-6">
+          <div>
+            <label className="block text-xs font-bold text-slate-500 mb-2 uppercase">
+              Project type <span className="text-red-500">*</span>
+            </label>
+            <select
+              value={projectType || project?.project_type || ''}
+              onChange={(e) => setProjectType(e.target.value)}
+              className="input-modern w-full max-w-xs"
+            >
+              <option value="">Select project type…</option>
+              <option value="new_build">New build</option>
+              <option value="existing">Existing</option>
+              <option value="architectural_drawing">Architectural drawing</option>
+            </select>
+            <p className="text-xs text-slate-500 mt-1">Required for rendering. Affects how constraints are applied.</p>
+          </div>
           <div>
             <label className="block text-xs font-bold text-slate-500 mb-2 uppercase">
               Reference samples

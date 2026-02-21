@@ -96,6 +96,15 @@ serve(async (req) => {
     );
   }
 
+  const validProjectTypes = ['new_build', 'existing', 'architectural_drawing'];
+  const projectType = project.project_type;
+  if (!projectType || !validProjectTypes.includes(projectType)) {
+    return new Response(
+      JSON.stringify({ error: 'Project type is required. Select New build, Existing, or Architectural drawing.' }),
+      { status: 400, headers: { 'Content-Type': 'application/json', ...corsHeaders } }
+    );
+  }
+
   const maskRegions = Array.isArray(rawMaskRegions)
     ? rawMaskRegions.filter((r) => r && typeof r.sampleIndex === 'number' && typeof r.mask === 'string' && r.mask.trim().length > 0)
     : [];
@@ -107,7 +116,7 @@ serve(async (req) => {
     mask: maskImageUrl && typeof maskImageUrl === 'string' && maskImageUrl.trim().length > 0 ? maskImageUrl.trim() : undefined,
     maskRegions: maskRegions.length > 0 ? maskRegions : undefined,
     inputImageUrl: rawInputImageUrl && typeof rawInputImageUrl === 'string' && rawInputImageUrl.trim().length > 0 ? rawInputImageUrl.trim() : undefined,
-    projectType: project.project_type || null,
+    projectType,
   };
 
   await supabaseAdmin.from('projects').update({ status: 'processing' }).eq('id', projectId);
