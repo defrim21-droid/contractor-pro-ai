@@ -14,6 +14,16 @@ export interface JobPayload {
   projectType: string | null;
 }
 
+async function getImageBuffer(imageUrl: string): Promise<Buffer> {
+  if (imageUrl.startsWith('data:')) {
+    const base64 = imageUrl.replace(/^data:image\/\w+;base64,/, '');
+    return Buffer.from(base64, 'base64');
+  }
+  const resp = await fetch(imageUrl);
+  const ab = await resp.arrayBuffer();
+  return Buffer.from(ab);
+}
+
 async function getImageDimensions(imageUrl: string): Promise<{ w: number; h: number }> {
   const isDataUrl = imageUrl.startsWith('data:');
   let buffer: Buffer;
@@ -37,6 +47,43 @@ async function resizeMaskToMatch(maskDataUrl: string, targetW: number, targetH: 
   if (meta.width === targetW && meta.height === targetH) return maskDataUrl;
   const out = await sharp(input).resize(targetW, targetH).png().toBuffer();
   return `data:image/png;base64,${out.toString('base64')}`;
+}
+
+/**
+ * Post-process compositing: enforce mask boundaries.
+ * Mask format: transparent = edit (use AI output), opaque = preserve (use original).
+ * Result = original * (maskAlpha/255) + aiOutput * (1 - maskAlpha/255)
+ */
+async function compositeWithMask(
+  originalBuffer: Buffer,
+  aiOutputBuffer: Buffer,
+  maskDataUrl: string,
+  width: number,
+  height: number
+): Promise<Buffer> {
+  const maskBase64 = maskDataUrl.replace(/^data:image\/\w+;base64,/, '');
+  const maskBuffer = Buffer.from(maskBase64, 'base64');
+
+  const [origRaw, aiRaw, maskRaw] = await Promise.all([
+    sharp(originalBuffer).ensureAlpha().resize(width, height).raw().toBuffer({ resolveWithObject: true }),
+    sharp(aiOutputBuffer).ensureAlpha().resize(width, height).raw().toBuffer({ resolveWithObject: true }),
+    sharp(maskBuffer).ensureAlpha().resize(width, height).raw().toBuffer({ resolveWithObject: true }),
+  ]);
+
+  const out = Buffer.alloc(origRaw.data.length);
+  const orig = origRaw.data;
+  const ai = aiRaw.data;
+  const mask = maskRaw.data;
+
+  for (let i = 0; i < orig.length; i += 4) {
+    const ma = mask[i + 3]! / 255; // mask alpha: 1 = preserve, 0 = edit
+    out[i] = Math.round(orig[i]! * ma + ai[i]! * (1 - ma));
+    out[i + 1] = Math.round(orig[i + 1]! * ma + ai[i + 1]! * (1 - ma));
+    out[i + 2] = Math.round(orig[i + 2]! * ma + ai[i + 2]! * (1 - ma));
+    out[i + 3] = Math.round(orig[i + 3]! * ma + ai[i + 3]! * (1 - ma));
+  }
+
+  return sharp(out, { raw: { width, height, channels: 4 } }).png().toBuffer();
 }
 
 async function runEdit(
@@ -105,9 +152,12 @@ export async function processJob(
       ? rawInputImageUrl.trim()
       : baseImageUrl;
 
-  let lastResultB64: string;
+  const dims = await getImageDimensions(baseUrl);
+  const originalBuffer = await getImageBuffer(baseUrl);
+  let lastResultBuffer: Buffer;
 
   if (maskRegions.length > 1) {
+    let currentBuffer = originalBuffer;
     let currentImageUrl = baseUrl;
     for (let i = 0; i < maskRegions.length; i++) {
       const region = maskRegions[i];
@@ -119,9 +169,11 @@ export async function processJob(
         colorName,
       });
       const dataUrl = await runEdit(openaiKey, currentImageUrl, region.mask, regionPrompt, samples);
-      currentImageUrl = dataUrl;
+      const aiBuffer = Buffer.from(dataUrl.replace(/^data:image\/\w+;base64,/, ''), 'base64');
+      currentBuffer = await compositeWithMask(currentBuffer, aiBuffer, region.mask, dims.w, dims.h);
+      currentImageUrl = `data:image/png;base64,${currentBuffer.toString('base64')}`;
     }
-    lastResultB64 = currentImageUrl.replace(/^data:image\/\w+;base64,/, '');
+    lastResultBuffer = currentBuffer;
   } else {
     const maskUrl = hasMask && maskImageUrl ? maskImageUrl.trim() : maskRegions[0]?.mask ?? null;
     const fullPrompt =
@@ -133,10 +185,15 @@ export async function processJob(
           })
         : buildPrompt(prompt, projectType, hasMask);
     const dataUrl = await runEdit(openaiKey, baseUrl, maskUrl, fullPrompt, samples);
-    lastResultB64 = dataUrl.replace(/^data:image\/\w+;base64,/, '');
+    const aiBuffer = Buffer.from(dataUrl.replace(/^data:image\/\w+;base64,/, ''), 'base64');
+    if (maskUrl) {
+      lastResultBuffer = await compositeWithMask(originalBuffer, aiBuffer, maskUrl, dims.w, dims.h);
+    } else {
+      lastResultBuffer = aiBuffer;
+    }
   }
 
-  const binary = Buffer.from(lastResultB64, 'base64');
+  const binary = lastResultBuffer;
   const timestamp = Date.now();
   const path = `renders/${userId}/${projectId}-${timestamp}.png`;
 
