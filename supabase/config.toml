@@ -1,0 +1,7 @@
+# Supabase Edge Functions configuration
+# https://supabase.com/docs/guides/functions/function-configuration
+
+# Allow frontend to invoke without gateway JWT verification.
+# Each function still validates the user (e.g. via Authorization header and RLS).
+[functions.generate-image]
+verify_jwt = false

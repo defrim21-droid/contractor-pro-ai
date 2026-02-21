@@ -1,0 +1,153 @@
+@import "tailwindcss";
+
+@layer base {
+  button,
+  [role="button"],
+  a {
+    cursor: pointer;
+  }
+
+  body {
+    @apply antialiased;
+  }
+}
+
+@layer utilities {
+  /* Modern Shadow System */
+  .shadow-soft {
+    box-shadow: 0 2px 8px 0 rgb(0 0 0 / 0.04), 0 1px 2px 0 rgb(0 0 0 / 0.06);
+  }
+
+  .shadow-medium {
+    box-shadow: 0 4px 16px 0 rgb(0 0 0 / 0.06), 0 2px 4px 0 rgb(0 0 0 / 0.08);
+  }
+
+  .shadow-large {
+    box-shadow: 0 8px 32px 0 rgb(0 0 0 / 0.08), 0 4px 8px 0 rgb(0 0 0 / 0.1);
+  }
+
+  .shadow-glow {
+    box-shadow: 0 0 0 1px rgb(59 130 246 / 0.1), 0 4px 16px 0 rgb(59 130 246 / 0.15);
+  }
+
+  /* Gradient Backgrounds */
+  .bg-gradient-primary {
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  }
+
+  .bg-gradient-blue {
+    background: linear-gradient(135deg, #3b82f6 0%, #2563eb 100%);
+  }
+
+  .bg-gradient-subtle {
+    background: linear-gradient(135deg, #f8fafc 0%, #f1f5f9 100%);
+  }
+
+  /* Modern Card Styles */
+  .card-modern {
+    background: white;
+    border-radius: 1rem;
+    border: 1px solid rgb(226 232 240 / 0.6);
+    box-shadow: 0 2px 8px 0 rgb(0 0 0 / 0.04), 0 1px 2px 0 rgb(0 0 0 / 0.06);
+    backdrop-filter: blur(10px);
+    transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+  }
+
+  .card-modern:hover {
+    box-shadow: 0 4px 16px 0 rgb(0 0 0 / 0.06), 0 2px 4px 0 rgb(0 0 0 / 0.08);
+    border-color: rgb(203 213 225 / 0.6);
+    transform: translateY(-2px);
+  }
+
+  /* Modern Button Styles */
+  .btn-primary {
+    background: linear-gradient(135deg, #3b82f6 0%, #2563eb 100%);
+    color: white;
+    font-weight: 600;
+    padding: 0.75rem 1.5rem;
+    border-radius: 0.75rem;
+    box-shadow: 0 4px 16px 0 rgb(0 0 0 / 0.06), 0 2px 4px 0 rgb(0 0 0 / 0.08);
+    transition: all 0.2s ease-out;
+  }
+
+  .btn-primary:hover {
+    box-shadow: 0 0 0 1px rgb(59 130 246 / 0.1), 0 4px 16px 0 rgb(59 130 246 / 0.15);
+    transform: scale(1.02);
+  }
+
+  .btn-primary:active {
+    transform: scale(0.98);
+  }
+
+  .btn-secondary {
+    background: white;
+    color: rgb(51 65 85);
+    font-weight: 600;
+    padding: 0.75rem 1.5rem;
+    border-radius: 0.75rem;
+    border: 1px solid rgb(226 232 240);
+    box-shadow: 0 2px 8px 0 rgb(0 0 0 / 0.04), 0 1px 2px 0 rgb(0 0 0 / 0.06);
+    transition: all 0.2s ease-out;
+  }
+
+  .btn-secondary:hover {
+    background: rgb(248 250 252);
+    border-color: rgb(203 213 225);
+  }
+
+  /* Modern Input Styles */
+  .input-modern {
+    width: 100%;
+    padding: 0.75rem 1rem;
+    background: white;
+    border: 1px solid rgb(226 232 240);
+    border-radius: 0.75rem;
+    transition: all 0.2s ease-out;
+  }
+
+  .input-modern::placeholder {
+    color: rgb(148 163 184);
+  }
+
+  .input-modern:focus {
+    outline: none;
+    border-color: rgb(59 130 246);
+    box-shadow: 0 0 0 3px rgb(59 130 246 / 0.1), 0 2px 8px 0 rgb(0 0 0 / 0.04), 0 1px 2px 0 rgb(0 0 0 / 0.06);
+  }
+
+  /* Glass Effect */
+  .glass {
+    background: rgba(255, 255, 255, 0.8);
+    backdrop-filter: blur(12px) saturate(180%);
+    border: 1px solid rgba(255, 255, 255, 0.3);
+  }
+
+  /* Smooth Animations */
+  .animate-fade-in {
+    animation: fadeIn 0.3s ease-out;
+  }
+
+  .animate-slide-up {
+    animation: slideUp 0.3s ease-out;
+  }
+
+  @keyframes fadeIn {
+    from {
+      opacity: 0;
+    }
+    to {
+      opacity: 1;
+    }
+  }
+
+  @keyframes slideUp {
+    from {
+      opacity: 0;
+      transform: translateY(10px);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+}
