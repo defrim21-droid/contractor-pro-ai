@@ -49,7 +49,8 @@ export function buildPrompt(
   userPrompt: string,
   projectType: string | null,
   hasMask: boolean,
-  regionContext?: { sampleIndex: number; sampleName: string; colorName: string }
+  regionContext?: { sampleIndex: number; sampleName: string; colorName: string },
+  regionSpecificOnly?: boolean
 ): string {
   let constraint: string | undefined;
   if (projectType === 'new_build' && hasMask) {
@@ -61,8 +62,13 @@ export function buildPrompt(
   }
   let instruction = userPrompt.trim();
   if (regionContext) {
-    const colorHint = `The ${regionContext.colorName} masked area = ${regionContext.sampleName}. `;
-    instruction = `Apply to this masked region ONLY. Use ONLY the material from the single reference image provided—it is ${regionContext.sampleName} (e.g. stucco, brick, siding). Do not use any other material. ${colorHint}User instruction: ${instruction}`;
+    if (regionSpecificOnly) {
+      // Multi-region: use focused instruction only—avoid mentioning other materials
+      instruction = `Apply the material from ${regionContext.sampleName} to the ${regionContext.colorName} masked area only. Use only the single reference image provided. Do not use any other material.`;
+    } else {
+      const colorHint = `The ${regionContext.colorName} masked area = ${regionContext.sampleName}. `;
+      instruction = `Apply to this masked region ONLY. Use ONLY the material from the single reference image provided—it is ${regionContext.sampleName} (e.g. stucco, brick, siding). Do not use any other material. ${colorHint}User instruction: ${instruction}`;
+    }
   }
   if (constraint) {
     instruction = `${constraint}${instruction}`;
