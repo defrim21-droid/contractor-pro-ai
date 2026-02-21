@@ -5,6 +5,7 @@ import { supabase } from './supabase.js';
 
 const OPENAI_EDITS_URL = 'https://api.openai.com/v1/images/edits';
 const BUCKET = 'project-images-public';
+const FAL_MAX_DIMENSION = 1536;
 
 async function resolveMaskToBuffer(maskInput: string): Promise<Buffer> {
   if (maskInput.startsWith('http://') || maskInput.startsWith('https://')) {
@@ -112,6 +113,27 @@ async function runEdit(
   return `data:image/png;base64,${b64}`;
 }
 
+/** Resize image to fit within max dimension; return buffer and final dimensions. */
+async function resizeImageForFal(imageUrl: string): Promise<{ buffer: Buffer; w: number; h: number }> {
+  const buffer = await resolveMaskToBuffer(imageUrl);
+  const meta = await sharp(buffer).metadata();
+  const w = meta.width ?? 1024;
+  const h = meta.height ?? 1024;
+  const scale =
+    w > FAL_MAX_DIMENSION || h > FAL_MAX_DIMENSION ? FAL_MAX_DIMENSION / Math.max(w, h) : 1;
+  const nw = Math.round(w * scale);
+  const nh = Math.round(h * scale);
+  const resized = scale < 1 ? await sharp(buffer).resize(nw, nh).png().toBuffer() : buffer;
+  return { buffer: resized, w: nw, h: nh };
+}
+
+/** Upload buffer to Fal storage. */
+async function uploadToFalStorage(falKey: string, buffer: Buffer, type = 'image/png'): Promise<string> {
+  fal.config({ credentials: falKey });
+  const blob = new Blob([new Uint8Array(buffer)], { type });
+  return fal.storage.upload(blob);
+}
+
 /** Fal.ai Flux General inpainting — strict mask adherence + reference image (IP-Adapter-style). */
 async function runFalFluxInpaint(
   falKey: string,
@@ -121,24 +143,31 @@ async function runFalFluxInpaint(
   referenceImageUrl: string | null
 ): Promise<string> {
   fal.config({ credentials: falKey });
-  const dims = await getImageDimensions(inputImageUrl);
-  const maskBuffer = await convertMaskToFalFormatBuffer(maskInput, dims.w, dims.h);
 
-  // Upload mask to Fal storage (avoids 422 from large data URLs; Fal prefers URLs)
-  const maskFile = new Blob([new Uint8Array(maskBuffer)], { type: 'image/png' });
-  const maskUrl = await fal.storage.upload(maskFile);
+  // Resize input to Fal limits; mask must match resized dimensions
+  const { buffer: inputBuffer, w: targetW, h: targetH } = await resizeImageForFal(inputImageUrl);
+  const maskBuffer = await convertMaskToFalFormatBuffer(maskInput, targetW, targetH);
+
+  // Upload all to Fal storage (avoids file_download_error and image_too_large)
+  const [inputImageFalUrl, maskUrl, refUrl] = await Promise.all([
+    uploadToFalStorage(falKey, inputBuffer),
+    uploadToFalStorage(falKey, maskBuffer),
+    referenceImageUrl?.trim()
+      ? resizeImageForFal(referenceImageUrl).then((r) => uploadToFalStorage(falKey, r.buffer))
+      : Promise.resolve(null),
+  ]);
 
   const input: Record<string, unknown> = {
     prompt: editPrompt,
-    image_url: inputImageUrl,
+    image_url: inputImageFalUrl,
     mask_url: maskUrl,
     negative_prompt:
       'blurry, low quality, distorted, cartoon, painting, illustration, moldings, window trim, decorative trim, added trim, new trim, architectural ornamentation, extra elements outside mask',
     strength: 0.82,
   };
 
-  if (referenceImageUrl && referenceImageUrl.trim().length > 0) {
-    input.reference_image_url = referenceImageUrl.trim();
+  if (refUrl) {
+    input.reference_image_url = refUrl;
     input.reference_strength = 0.7;
   }
 
@@ -149,18 +178,20 @@ async function runFalFluxInpaint(
       logs: true,
     });
   } catch (err) {
-    const body = err && typeof (err as any).body === 'string' ? (err as any).body : '';
-    const status = err && typeof (err as any).status === 'number' ? (err as any).status : '';
+    const e = err as any;
+    const detail = e?.detail ?? e?.body ?? (typeof e?.json === 'function' ? await e.json().catch(() => null) : null);
+    const errStr = typeof detail === 'object' ? JSON.stringify(detail) : String(detail ?? '');
     const msg = err instanceof Error ? err.message : String(err);
-    console.error(`[runFalFluxInpaint] Fal API error status=${status} body=${body} message=${msg}`);
-    throw new Error(body || msg || 'Fal inpainting failed');
+    console.error(`[runFalFluxInpaint] Fal API error: status=${e?.status} detail=${errStr} message=${msg}`);
+    const userMsg = Array.isArray(detail) && detail[0]?.msg ? detail[0].msg : msg;
+    throw new Error(userMsg || 'Fal inpainting failed');
   }
 
   const images = (result.data as { images?: { url?: string }[] })?.images;
-  const imageUrl = images?.[0]?.url;
-  if (!imageUrl) throw new Error('No image in Fal inpainting response');
+  const resultImageUrl = images?.[0]?.url;
+  if (!resultImageUrl) throw new Error('No image in Fal inpainting response');
 
-  const resp = await fetch(imageUrl);
+  const resp = await fetch(resultImageUrl);
   const ab = await resp.arrayBuffer();
   const b64 = Buffer.from(ab).toString('base64');
   return `data:image/png;base64,${b64}`;
