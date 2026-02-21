@@ -37,8 +37,65 @@ export default function WorkspaceEditor({
   const [isSaving, setIsSaving] = useState(false);
   const [isGenerating, setIsGenerating] = useState(false);
   const [generationProgress, setGenerationProgress] = useState(0);
+  const [pendingCompletionProjectId, setPendingCompletionProjectId] = useState(null);
   const [isSavingPhotoAndBack, setIsSavingPhotoAndBack] = useState(false);
   const [isCreatingProject, setIsCreatingProject] = useState(false);
+
+  // Wait for render completion, then redirect to project folder
+  const completionHandledRef = useRef(false);
+  useEffect(() => {
+    if (!pendingCompletionProjectId) return;
+    completionHandledRef.current = false;
+    const projectId = pendingCompletionProjectId;
+    const handleComplete = async (p) => {
+      if (completionHandledRef.current) return;
+      completionHandledRef.current = true;
+      const { data } = await supabase.from('projects').select('*').eq('id', projectId).single();
+      onProjectSaved(data || p);
+      setPendingCompletionProjectId(null);
+      setProjectName('');
+      setProjectAddress('');
+      setSelectedImage(null);
+      setImageFile(null);
+      setCustomPrompt('');
+      setSwatches([]);
+      setIsGenerating(false);
+      toast.success('Rendering complete!');
+    };
+    const handleFailed = () => {
+      if (completionHandledRef.current) return;
+      completionHandledRef.current = true;
+      setPendingCompletionProjectId(null);
+      setIsGenerating(false);
+      toast.error('Rendering failed. Please try again.');
+    };
+    const channel = supabase
+      .channel(`workspace-completion-${projectId}`)
+      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'projects', filter: `id=eq.${projectId}` }, async (payload) => {
+        const p = payload.new;
+        if (p.status === 'completed') {
+          handleComplete(p);
+        } else if (p.status === 'failed') {
+          handleFailed();
+        }
+      })
+      .subscribe();
+    const poll = setInterval(async () => {
+      const { data } = await supabase.from('projects').select('status').eq('id', projectId).single();
+      if (!data) return;
+      if (data.status === 'completed') {
+        clearInterval(poll);
+        handleComplete(data);
+      } else if (data.status === 'failed') {
+        clearInterval(poll);
+        handleFailed();
+      }
+    }, 2500);
+    return () => {
+      supabase.removeChannel(channel);
+      clearInterval(poll);
+    };
+  }, [pendingCompletionProjectId, onProjectSaved]);
 
   // Simulated progress bar during generation (API doesn't expose real progress)
   useEffect(() => {
@@ -363,6 +420,7 @@ export default function WorkspaceEditor({
     }
 
     setIsGenerating(true);
+    let waitingForWorker = false;
 
     try {
       // Validate required fields
@@ -459,21 +517,15 @@ export default function WorkspaceEditor({
         return;
       }
 
-      const { data: updated } = await supabase.from('projects').select('*').eq('id', projectId).single();
       toast.success('Rendering started. The image will appear when complete.');
-      onProjectSaved(updated || newProject);
-
-      setProjectName('');
-      setProjectAddress('');
-      setSelectedImage(null);
-      setImageFile(null);
-      setCustomPrompt('');
-      setSwatches([]);
+      setPendingCompletionProjectId(projectId);
+      // Stay in isGenerating until worker completes; useEffect handles redirect
+      waitingForWorker = true;
     } catch (error) {
       console.error('Save error:', error);
       toast.error(error?.message || 'Failed to save project.');
     } finally {
-      setIsGenerating(false);
+      if (!waitingForWorker) setIsGenerating(false);
     }
   };
 

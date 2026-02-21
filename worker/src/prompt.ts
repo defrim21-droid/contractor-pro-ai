@@ -61,8 +61,8 @@ export function buildPrompt(
   }
   let instruction = userPrompt.trim();
   if (regionContext) {
-    const colorHint = `(The ${regionContext.colorName} highlighted area corresponds to ${regionContext.sampleName}). `;
-    instruction = `Apply to this masked region ONLY. Extract and use only the specific material the user names from ${regionContext.sampleName} (e.g. stucco, brick, siding)—ignore other materials in the reference. ${colorHint}User instruction: ${instruction}`;
+    const colorHint = `The ${regionContext.colorName} masked area = ${regionContext.sampleName}. `;
+    instruction = `Apply to this masked region ONLY. Use ONLY the material from the single reference image provided—it is ${regionContext.sampleName} (e.g. stucco, brick, siding). Do not use any other material. ${colorHint}User instruction: ${instruction}`;
   }
   if (constraint) {
     instruction = `${constraint}${instruction}`;

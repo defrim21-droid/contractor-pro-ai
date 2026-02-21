@@ -168,7 +168,9 @@ export async function processJob(
         sampleName,
         colorName,
       });
-      const dataUrl = await runEdit(openaiKey, currentImageUrl, region.mask, regionPrompt, samples);
+      // Pass ONLY this region's sample so the model can't use the wrong material
+      const regionSamples = [samples[region.sampleIndex]!].filter(Boolean);
+      const dataUrl = await runEdit(openaiKey, currentImageUrl, region.mask, regionPrompt, regionSamples);
       const aiBuffer = Buffer.from(dataUrl.replace(/^data:image\/\w+;base64,/, ''), 'base64');
       currentBuffer = await compositeWithMask(currentBuffer, aiBuffer, region.mask, dims.w, dims.h);
       currentImageUrl = `data:image/png;base64,${currentBuffer.toString('base64')}`;
