@@ -242,10 +242,9 @@ CMD ["node", "dist/index.js"]
 | `SUPABASE_URL`       | Supabase project URL             |
 | `SUPABASE_SERVICE_ROLE_KEY` | Read/write jobs, projects, storage |
 | `OPENAI_API_KEY`     | OpenAI Image Edits (non-masked)  |
-| `REPLICATE_API_TOKEN` | Replicate Nano Banana Pro (masked edits + reference images) — preferred |
-| `FAL_KEY`            | Fal.ai Flux inpainting (masked edits fallback) |
+| `REPLICATE_API_TOKEN` | Replicate Nano Banana Pro (masked edits + reference images) |
 
-**Routing:** Masked requests (brush strokes) → Replicate `google/nano-banana-pro` (mask + reference) when `REPLICATE_API_TOKEN` is set; else Fal.ai. Non-masked → OpenAI Image Edits API.
+**Routing:** Masked requests (brush strokes) → Replicate `google/nano-banana-pro`. Non-masked → OpenAI Image Edits API.
 
 ---
 

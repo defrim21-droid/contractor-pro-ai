@@ -66,12 +66,11 @@ async function pollAndProcess(): Promise<void> {
   }
 
   try {
-    const falKey = process.env.FAL_KEY;
     const replicateKey = process.env.REPLICATE_API_TOKEN;
 
     const generatedUrl = await processJob(
       openaiKey,
-      falKey,
+      undefined,
       replicateKey,
       projectId,
       userId,

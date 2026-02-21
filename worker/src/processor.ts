@@ -309,7 +309,7 @@ async function runNanoBananaInpaint(
 
 export async function processJob(
   openaiKey: string,
-  falKey: string | undefined,
+  _falKey: string | undefined,
   replicateKey: string | undefined,
   projectId: string,
   userId: string,
@@ -327,7 +327,7 @@ export async function processJob(
   const hasMask =
     !!(maskImageUrl && typeof maskImageUrl === 'string' && maskImageUrl.trim().length > 0) || maskRegions.length > 0;
 
-  const maskedBackend = replicateKey ? 'Replicate (Nano Banana Pro)' : falKey ? 'Fal' : 'none';
+  const maskedBackend = replicateKey ? 'Replicate (Nano Banana Pro)' : 'none';
   console.log(
     `[processJob] project=${projectId} hasMask=${hasMask} maskRegions=${maskRegions.length} maskImageUrl=${!!maskImageUrl} → ${hasMask ? maskedBackend : 'OpenAI'}`
   );
@@ -349,13 +349,10 @@ export async function processJob(
       fullPrompt: string,
       refUrl: string | null
     ): Promise<string> => {
-      if (replicateKey) {
-        return runNanoBananaInpaint(replicateKey, imgUrl, mask, fullPrompt, refUrl, userId, projectId);
+      if (!replicateKey) {
+        throw new Error('REPLICATE_API_TOKEN required for masked edits. Add it to your Railway variables.');
       }
-      if (falKey) {
-        return runFalFluxInpaint(falKey, imgUrl, mask, fullPrompt, refUrl);
-      }
-      throw new Error('REPLICATE_API_TOKEN or FAL_KEY required for masked edits.');
+      return runNanoBananaInpaint(replicateKey, imgUrl, mask, fullPrompt, refUrl, userId, projectId);
     };
 
     if (maskRegions.length > 1) {
