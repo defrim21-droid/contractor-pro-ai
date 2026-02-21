@@ -2,6 +2,7 @@
  * Frontend mask processing utilities
  * Process color-coded masks into binary masks before sending to backend
  */
+import { supabase } from '../supabaseClient';
 
 const MASK_MAX_DIMENSION = 1024;
 
@@ -68,7 +69,8 @@ export function createEditMaskFromBrushCanvas(brushCanvas, naturalSize) {
       }
     }
     ctx.putImageData(data, 0, 0);
-    resolve(out.toDataURL('image/png'));
+    const resized = resizeMaskIfNeeded(out);
+    resolve(resized.toDataURL('image/png'));
   });
 }
 
@@ -116,8 +118,37 @@ export function createEditMaskForColor(brushCanvas, naturalSize, targetColor) {
       }
     }
     ctx.putImageData(data, 0, 0);
-    resolve(out.toDataURL('image/png'));
+    const resized = resizeMaskIfNeeded(out);
+    resolve(resized.toDataURL('image/png'));
   });
+}
+
+/**
+ * Upload mask data URL to Supabase Storage and return public URL.
+ * Avoids large base64 in request body which can hit size limits.
+ * @param {string} maskDataURL - data:image/png;base64,...
+ * @param {string} userId
+ * @param {string} projectId
+ * @param {number} timestamp
+ * @param {number} [regionIndex] - optional, for multi-region masks
+ * @returns {Promise<string>} Public URL
+ */
+export async function uploadMaskToStorage(maskDataURL, userId, projectId, timestamp, regionIndex = null) {
+  const arr = maskDataURL.split(',');
+  const mime = (arr[0].match(/:(.*?);/) || [])[1] || 'image/png';
+  const bstr = atob(arr[1]);
+  const u8arr = new Uint8Array(bstr.length);
+  for (let i = 0; i < bstr.length; i++) u8arr[i] = bstr.charCodeAt(i);
+  const blob = new Blob([u8arr], { type: mime });
+  const suffix = regionIndex != null ? `-mask-${regionIndex}` : '-mask';
+  const path = `uploads/${userId}/${projectId}-${timestamp}${suffix}.png`;
+  const { error } = await supabase.storage.from('project-images-public').upload(path, blob, {
+    contentType: 'image/png',
+    upsert: true,
+  });
+  if (error) throw new Error(`Mask upload failed: ${error.message}`);
+  const { data } = supabase.storage.from('project-images-public').getPublicUrl(path);
+  return data.publicUrl;
 }
 
 /**

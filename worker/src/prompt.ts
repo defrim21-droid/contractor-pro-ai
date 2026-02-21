@@ -10,7 +10,7 @@ export const CONSTRAINTS: Record<string, string> = {
   new_build:
     'This is a new build project. Focus on cohesive design, material consistency, and professional construction appearance. Preserve architectural intent and ensure materials fit the context. ',
   new_build_masked:
-    'CRITICAL: The mask defines the ONLY area that may be modified. Transparent pixels in the mask = edit. Opaque pixels = DO NOT TOUCH. Do not apply any material, colour, or finish outside the masked region. Every pixel outside the mask must remain exactly as in the input image. ' +
+    'CRITICAL: The mask defines the ONLY area that may be modified. Transparent pixels in the mask = edit. Opaque pixels = DO NOT TOUCH. Do not apply any material, colour, or finish outside the masked region. Every pixel outside the mask must remain exactly as in the input image. Do not add moldings, trim, decorative elements, or any new architectural features. Only apply the specified material as a surface finish within the masked region—no additions. ' +
     'Use ONLY the specific material or finish the user names from the reference (e.g. stucco, brick, siding). If the reference contains multiple materials, isolate and apply only the one the user specifies. Do not transfer other materials, patterns, or finishes from the reference. ' +
     'Treat masked regions as unfinished construction substrate. Apply the requested material as an exterior finish system conforming exactly to the existing surface geometry without modifying structural form. ' +
     'The applied material must follow all existing reveals, returns, soffit depths, trim offsets, column curvature, and opening boundaries present in the original image. ' +
@@ -19,7 +19,7 @@ export const CONSTRAINTS: Record<string, string> = {
     'Maintain proper interface between installed material and adjacent trim, window frames, soffits, and fascia including realistic overlap, termination, and shadow interaction. ' +
     'Preserve all unmasked regions exactly including lighting, sky, ground conditions, structural framing, window glazing, and environmental elements. ',
   existing:
-    "CRITICAL when a mask is used: Edit ONLY the masked area. Do not modify any pixel outside the mask. " +
+    "CRITICAL when a mask is used: Edit ONLY the masked area. Do not modify any pixel outside the mask. Do not add moldings, trim, decorative elements, or any new architectural features. Only apply the specified material as a surface finish within the masked region—nothing else. " +
     "The uploaded image is a real photograph and must be preserved exactly. Do not regenerate, enhance, or reinterpret the scene globally. Perform a localized material substitution only where required to fulfill the user's request. " +
     "Use ONLY the specific material the user names from the reference (e.g. stucco, brick). If the reference has multiple materials, extract and apply only that one. Do not transfer other materials from the reference. " +
     'Maintain identical camera position, orientation, focal length, perspective, vanishing lines, and lens distortion present in the original image. ' +
@@ -32,7 +32,7 @@ export const CONSTRAINTS: Record<string, string> = {
   architectural_drawing:
     'This is an architectural drawing or plan. Interpret the drawing accurately. Apply materials and finishes to match the specified design intent. Maintain scale, proportions, and drawing conventions. ',
   architectural_drawing_masked:
-    'CRITICAL: The mask defines the ONLY area that may be modified. Edit ONLY the masked region. Do not modify any area outside the mask. ' +
+    'CRITICAL: The mask defines the ONLY area that may be modified. Edit ONLY the masked region. Do not modify any area outside the mask. Do not add moldings, trim, or decorative elements. Only apply the specified material within the masked region—no additions. ' +
     'Use ONLY the specific material the user names from the reference (e.g. stucco, brick). If the reference has multiple materials, extract and apply only that one. Do not transfer other materials from the reference. ' +
     'Treat the uploaded architectural drawing as an orthographic front elevation representing fixed structural geometry. Do not modify proportions, opening dimensions, rooflines, wall boundaries, trim placement, or architectural layout. ' +
     'Preserve all original linework representing structural edges including wall intersections, window openings, trim outlines, rooflines, column boundaries, and fascia lines. ' +
@@ -49,8 +49,7 @@ export function buildPrompt(
   userPrompt: string,
   projectType: string | null,
   hasMask: boolean,
-  regionContext?: { sampleIndex: number; sampleName: string; colorName: string },
-  regionSpecificOnly?: boolean
+  regionContext?: { sampleIndex: number; sampleName: string; colorName: string }
 ): string {
   let constraint: string | undefined;
   if (projectType === 'new_build' && hasMask) {
@@ -62,13 +61,8 @@ export function buildPrompt(
   }
   let instruction = userPrompt.trim();
   if (regionContext) {
-    if (regionSpecificOnly) {
-      // Multi-region: use focused instruction only—avoid mentioning other materials
-      instruction = `Apply the material from ${regionContext.sampleName} to the ${regionContext.colorName} masked area only. Use only the single reference image provided. Do not use any other material.`;
-    } else {
-      const colorHint = `The ${regionContext.colorName} masked area = ${regionContext.sampleName}. `;
-      instruction = `Apply to this masked region ONLY. Use ONLY the material from the single reference image provided—it is ${regionContext.sampleName} (e.g. stucco, brick, siding). Do not use any other material. ${colorHint}User instruction: ${instruction}`;
-    }
+    const colorHint = `The ${regionContext.colorName} masked area = ${regionContext.sampleName}. `;
+    instruction = `Apply to this masked region ONLY. Use ONLY the material from the single reference image provided—it is ${regionContext.sampleName} (e.g. stucco, brick, siding). Do not use any other material. Do not add moldings, trim, or decorative elements. Only apply the material as a surface finish within the mask—nothing else. ${colorHint}User instruction: ${instruction}`;
   }
   if (constraint) {
     instruction = `${constraint}${instruction}`;

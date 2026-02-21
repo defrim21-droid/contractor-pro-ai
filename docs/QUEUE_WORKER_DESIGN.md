@@ -241,7 +241,10 @@ CMD ["node", "dist/index.js"]
 |----------------------|----------------------------------|
 | `SUPABASE_URL`       | Supabase project URL             |
 | `SUPABASE_SERVICE_ROLE_KEY` | Read/write jobs, projects, storage |
-| `OPENAI_API_KEY`     | OpenAI Image Edits API           |
+| `OPENAI_API_KEY`     | OpenAI Image Edits (non-masked)  |
+| `FAL_KEY`            | Fal.ai Flux inpainting (masked edits, with reference images) |
+
+**Routing:** Masked requests (brush strokes) → Fal.ai `fal-ai/flux-general/inpainting` (reference image + mask). Non-masked → OpenAI Image Edits API.
 
 ---
 

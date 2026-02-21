@@ -5,7 +5,7 @@ import { supabase } from './supabaseClient';
 import { processAiRenovation } from './aiService';
 import { checkRenderingLimit } from './utils/planLimits';
 import { getTrialInfo } from './utils/trialTracking';
-import { createEditMaskFromBrushCanvas, createEditMaskForColor, getColorsWithStrokes, getImageDimensionsFromUrl } from './utils/maskProcessing';
+import { createEditMaskFromBrushCanvas, createEditMaskForColor, getColorsWithStrokes, getImageDimensionsFromUrl, uploadMaskToStorage } from './utils/maskProcessing';
 import { convertHeicToJpegIfNeeded } from './utils/heicConversion';
 import { TrashIcon, SparklesIcon, ArrowDownTrayIcon, ArrowLeftIcon, PaintBrushIcon, XMarkIcon, ArrowUturnLeftIcon } from '@heroicons/react/24/outline';
 
@@ -459,8 +459,9 @@ export default function WorkspaceEditor({
         name: s.name || `Sample ${i + 1}`,
         url: s.url,
       }));
-      let maskDataURL = null;
+      let maskUrl = null;
       let maskRegions = null;
+      const ts = Date.now();
       if (hasBrushStrokes() && brushCanvasRef.current) {
         let maskSize;
         try {
@@ -471,13 +472,15 @@ export default function WorkspaceEditor({
         const colorsWithStrokes = getColorsWithStrokes(brushCanvasRef.current, swatches);
         if (colorsWithStrokes.length >= 1) {
           maskRegions = await Promise.all(
-            colorsWithStrokes.map(async (sampleIndex) => ({
-              sampleIndex,
-              mask: await createEditMaskForColor(brushCanvasRef.current, maskSize, swatches[sampleIndex].color),
-            }))
+            colorsWithStrokes.map(async (sampleIndex, idx) => {
+              const dataUrl = await createEditMaskForColor(brushCanvasRef.current, maskSize, swatches[sampleIndex].color);
+              const url = await uploadMaskToStorage(dataUrl, userId, projectId, ts, idx);
+              return { sampleIndex, mask: url };
+            })
           );
         } else {
-          maskDataURL = await createEditMaskFromBrushCanvas(brushCanvasRef.current, maskSize);
+          const dataUrl = await createEditMaskFromBrushCanvas(brushCanvasRef.current, maskSize);
+          maskUrl = await uploadMaskToStorage(dataUrl, userId, projectId, ts);
         }
       }
       const { data: fnData, error: fnError } = await supabase.functions.invoke('generate-image', {
@@ -485,7 +488,7 @@ export default function WorkspaceEditor({
           projectId,
           prompt: trimmedPrompt,
           samples,
-          mask: maskDataURL || undefined,
+          mask: maskUrl || undefined,
           maskRegions: maskRegions || undefined,
           inputImageUrl: editFromImageUrl || undefined,
         },

@@ -1,9 +1,39 @@
 import sharp from 'sharp';
+import { fal } from '@fal-ai/client';
 import { buildPrompt, COLOR_NAMES } from './prompt.js';
 import { supabase } from './supabase.js';
 
 const OPENAI_EDITS_URL = 'https://api.openai.com/v1/images/edits';
 const BUCKET = 'project-images-public';
+
+async function resolveMaskToBuffer(maskInput: string): Promise<Buffer> {
+  if (maskInput.startsWith('http://') || maskInput.startsWith('https://')) {
+    const resp = await fetch(maskInput);
+    return Buffer.from(await resp.arrayBuffer());
+  }
+  const base64 = maskInput.replace(/^data:image\/\w+;base64,/, '');
+  return Buffer.from(base64, 'base64');
+}
+
+/** Fal.ai mask: white = inpaint, black = preserve. Our mask: transparent = edit, opaque = preserve. */
+async function convertMaskToFalFormat(
+  maskInput: string,
+  width: number,
+  height: number
+): Promise<string> {
+  const input = await resolveMaskToBuffer(maskInput);
+  const { data, info } = await sharp(input).ensureAlpha().resize(width, height).raw().toBuffer({ resolveWithObject: true });
+  for (let i = 0; i < data.length; i += 4) {
+    const a = data[i + 3]!;
+    const v = a < 128 ? 255 : 0; // transparent (edit) → white, opaque (preserve) → black
+    data[i] = v;
+    data[i + 1] = v;
+    data[i + 2] = v;
+    data[i + 3] = 255;
+  }
+  const out = await sharp(data, { raw: { width, height, channels: 4 } }).png().toBuffer();
+  return `data:image/png;base64,${out.toString('base64')}`;
+}
 
 export interface JobPayload {
   prompt: string;
@@ -83,8 +113,50 @@ async function runEdit(
   return `data:image/png;base64,${b64}`;
 }
 
+/** Fal.ai Flux General inpainting — strict mask adherence + reference image (IP-Adapter-style). */
+async function runFalFluxInpaint(
+  falKey: string,
+  inputImageUrl: string,
+  maskDataUrl: string,
+  editPrompt: string,
+  referenceImageUrl: string | null
+): Promise<string> {
+  fal.config({ credentials: falKey });
+  const dims = await getImageDimensions(inputImageUrl);
+  const falMaskDataUrl = await convertMaskToFalFormat(maskDataUrl, dims.w, dims.h);
+
+  const input: Record<string, unknown> = {
+    prompt: editPrompt,
+    image_url: inputImageUrl,
+    mask_url: falMaskDataUrl,
+    negative_prompt:
+      'blurry, low quality, distorted, cartoon, painting, illustration, moldings, window trim, decorative trim, added trim, new trim, architectural ornamentation, extra elements outside mask',
+    strength: 0.82,
+  };
+
+  if (referenceImageUrl && referenceImageUrl.trim().length > 0) {
+    input.reference_image_url = referenceImageUrl.trim();
+    input.reference_strength = 0.7;
+  }
+
+  const result = await fal.subscribe('fal-ai/flux-general/inpainting', {
+    input: input as any,
+    logs: true,
+  });
+
+  const images = (result.data as { images?: { url?: string }[] })?.images;
+  const imageUrl = images?.[0]?.url;
+  if (!imageUrl) throw new Error('No image in Fal inpainting response');
+
+  const resp = await fetch(imageUrl);
+  const ab = await resp.arrayBuffer();
+  const b64 = Buffer.from(ab).toString('base64');
+  return `data:image/png;base64,${b64}`;
+}
+
 export async function processJob(
   openaiKey: string,
+  falKey: string | undefined,
   projectId: string,
   userId: string,
   baseImageUrl: string,
@@ -100,6 +172,11 @@ export async function processJob(
     : [];
   const hasMask =
     !!(maskImageUrl && typeof maskImageUrl === 'string' && maskImageUrl.trim().length > 0) || maskRegions.length > 0;
+
+  console.log(
+    `[processJob] project=${projectId} hasMask=${hasMask} maskRegions=${maskRegions.length} maskImageUrl=${!!maskImageUrl} → ${hasMask ? 'Fal' : 'OpenAI'}`
+  );
+
   const baseUrl =
     rawInputImageUrl && typeof rawInputImageUrl === 'string' && rawInputImageUrl.trim().length > 0
       ? rawInputImageUrl.trim()
@@ -107,34 +184,47 @@ export async function processJob(
 
   let lastResultB64: string;
 
-  if (maskRegions.length > 1) {
-    let currentImageUrl = baseUrl;
-    for (let i = 0; i < maskRegions.length; i++) {
-      const region = maskRegions[i];
-      const sampleName = samples[region.sampleIndex]?.name || `Sample ${region.sampleIndex + 1}`;
-      const colorName = COLOR_NAMES[region.sampleIndex] ?? `sample ${region.sampleIndex + 1}`;
-      const regionPrompt = buildPrompt(prompt, projectType, true, {
-        sampleIndex: region.sampleIndex,
-        sampleName,
-        colorName,
-      }, true);
-      // Pass ONLY this region's sample so the model can't use the wrong material
-      const regionSamples = [samples[region.sampleIndex]!].filter(Boolean);
-      const dataUrl = await runEdit(openaiKey, currentImageUrl, region.mask, regionPrompt, regionSamples);
-      currentImageUrl = dataUrl;
+  if (hasMask) {
+    // Route to Fal.ai SDXL inpainting — strict mask adherence
+    if (!falKey) throw new Error('FAL_KEY required for masked edits. Add FAL_KEY to your environment.');
+    if (maskRegions.length > 1) {
+      let currentImageUrl = baseUrl;
+      for (let i = 0; i < maskRegions.length; i++) {
+        const region = maskRegions[i];
+        const sampleName = samples[region.sampleIndex]?.name || `Sample ${region.sampleIndex + 1}`;
+        const colorName = COLOR_NAMES[region.sampleIndex] ?? `sample ${region.sampleIndex + 1}`;
+        const regionPrompt = buildPrompt(prompt, projectType, true, {
+          sampleIndex: region.sampleIndex,
+          sampleName,
+          colorName,
+        });
+        const refUrl = samples[region.sampleIndex]?.url?.trim() || null;
+        const dataUrl = await runFalFluxInpaint(falKey, currentImageUrl, region.mask, regionPrompt, refUrl);
+        currentImageUrl = dataUrl;
+      }
+      lastResultB64 = currentImageUrl.replace(/^data:image\/\w+;base64,/, '');
+    } else {
+      const maskUrl = maskImageUrl?.trim() ?? maskRegions[0]?.mask ?? null;
+      if (!maskUrl) throw new Error('Mask required for masked edit');
+      const fullPrompt =
+        maskRegions.length === 1
+          ? buildPrompt(prompt, projectType, true, {
+              sampleIndex: maskRegions[0].sampleIndex,
+              sampleName: samples[maskRegions[0].sampleIndex]?.name || `Sample ${maskRegions[0].sampleIndex + 1}`,
+              colorName: COLOR_NAMES[maskRegions[0].sampleIndex] ?? `sample ${maskRegions[0].sampleIndex + 1}`,
+            })
+          : buildPrompt(prompt, projectType, true);
+      const refUrl =
+        maskRegions.length === 1
+          ? (samples[maskRegions[0]!.sampleIndex]?.url?.trim() || null)
+          : (samples[0]?.url?.trim() || null);
+      const dataUrl = await runFalFluxInpaint(falKey, baseUrl, maskUrl, fullPrompt, refUrl);
+      lastResultB64 = dataUrl.replace(/^data:image\/\w+;base64,/, '');
     }
-    lastResultB64 = currentImageUrl.replace(/^data:image\/\w+;base64,/, '');
   } else {
-    const maskUrl = hasMask && maskImageUrl ? maskImageUrl.trim() : maskRegions[0]?.mask ?? null;
-    const fullPrompt =
-      maskRegions.length === 1
-        ? buildPrompt(prompt, projectType, true, {
-            sampleIndex: maskRegions[0].sampleIndex,
-            sampleName: samples[maskRegions[0].sampleIndex]?.name || `Sample ${maskRegions[0].sampleIndex + 1}`,
-            colorName: COLOR_NAMES[maskRegions[0].sampleIndex] ?? `sample ${maskRegions[0].sampleIndex + 1}`,
-          })
-        : buildPrompt(prompt, projectType, hasMask);
-    const dataUrl = await runEdit(openaiKey, baseUrl, maskUrl, fullPrompt, samples);
+    // Route to OpenAI Image Edits — no mask
+    const fullPrompt = buildPrompt(prompt, projectType, false);
+    const dataUrl = await runEdit(openaiKey, baseUrl, null, fullPrompt, samples);
     lastResultB64 = dataUrl.replace(/^data:image\/\w+;base64,/, '');
   }
 

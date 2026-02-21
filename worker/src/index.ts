@@ -66,8 +66,11 @@ async function pollAndProcess(): Promise<void> {
   }
 
   try {
+    const falKey = process.env.FAL_KEY;
+
     const generatedUrl = await processJob(
       openaiKey,
+      falKey,
       projectId,
       userId,
       project.original_image_url,
