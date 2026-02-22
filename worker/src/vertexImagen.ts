@@ -115,7 +115,7 @@ async function resizeAndPadForVertex(buffer: Buffer): Promise<{
  */
 function buildPromptWrapper(userPrompt: string, hasStyleRef: boolean): string {
   const stylePart = hasStyleRef
-    ? 'Apply the material and surface appearance from the reference swatch [3] to the masked area only. '
+    ? 'Apply the material and surface appearance from reference image [3] to the masked area only. '
     : '';
   return (
     stylePart +
@@ -166,8 +166,8 @@ export async function runVertexImagenInpaint(input: VertexImagenInput): Promise<
   const resizedW = Math.round(originalW * scale);
   const resizedH = Math.round(originalH * scale);
   const maskAtOrig = await convertMaskForVertex(maskBuf, resizedW, resizedH);
-  const padW = paddedW - originalW;
-  const padH = paddedH - originalH;
+  const padW = paddedW - resizedW;
+  const padH = paddedH - resizedH;
   const left = Math.floor(padW / 2);
   const top = Math.floor(padH / 2);
   const paddedMask =
@@ -213,6 +213,9 @@ export async function runVertexImagenInpaint(input: VertexImagenInput): Promise<
       referenceType: 'REFERENCE_TYPE_STYLE',
       referenceId: 3,
       referenceImage: { bytesBase64Encoded: paddedRef.toString('base64') },
+      styleImageConfig: {
+        styleDescription: 'material texture, color, and surface appearance',
+      },
     });
   }
 
@@ -245,7 +248,17 @@ export async function runVertexImagenInpaint(input: VertexImagenInput): Promise<
 
   if (!res.ok) {
     const errText = await res.text();
-    throw new Error(`Vertex Imagen API failed: ${res.status} ${errText}`);
+    let details = '';
+    try {
+      const errJson = JSON.parse(errText) as { error?: { message?: string; details?: unknown[] } };
+      details = errJson.error?.message ?? '';
+      if (errJson.error?.details?.length) {
+        details += ` ${JSON.stringify(errJson.error.details)}`;
+      }
+    } catch {
+      details = errText;
+    }
+    throw new Error(`Vertex Imagen API failed: ${res.status} ${details || errText}`);
   }
 
   const data = (await res.json()) as {
