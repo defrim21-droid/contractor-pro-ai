@@ -139,11 +139,11 @@ async function runGeminiNanoBananaInpaint(
   const markupB64 = markupBuffer.toString('base64');
 
   const refConstraint =
-    'The reference image may contain multiple materials. Use ONLY the specific material the user names (e.g. brick, stucco). Ignore all other materials. ';
+    'The reference image may contain multiple materials. Use ONLY the specific material named (e.g. brick, stucco). Ignore all other materials. ';
   const maskInstruction =
-    'Edit ONLY the red marked areas. Do not modify any other parts of the image. ';
+    'Edit ONLY the marked (red overlay) areas. Do not modify any other parts of the image. ';
   const prompt = referenceImageUrl
-    ? `${refConstraint}Apply the material and style from the second reference image to the red marked areas only. ${maskInstruction}${editPrompt}`
+    ? `${refConstraint}Apply the material and style from the second reference image to the marked areas only. ${maskInstruction}${editPrompt}`
     : `${maskInstruction}${editPrompt}`;
 
   const parts: Array<{ text: string } | { inlineData: { mimeType: string; data: string } }> = [

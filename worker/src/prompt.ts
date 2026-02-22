@@ -61,8 +61,7 @@ export function buildPrompt(
   }
   let instruction = userPrompt.trim();
   if (regionContext) {
-    const colorHint = `The ${regionContext.colorName} masked area = ${regionContext.sampleName}. `;
-    instruction = `Apply to this masked region ONLY. Use ONLY the material from the single reference image provided—it is ${regionContext.sampleName} (e.g. stucco, brick, siding). Do not use any other material. Do not add moldings, trim, or decorative elements. Only apply the material as a surface finish within the mask—nothing else. ${colorHint}User instruction: ${instruction}`;
+    instruction = `Apply to the marked area ONLY. Use ONLY the material from the single reference image provided—it is ${regionContext.sampleName} (e.g. stucco, brick, siding). Do not use any other material. Do not add moldings, trim, or decorative elements. Only apply the material as a surface finish within the marked area—nothing else. Apply the material from the reference image to the marked area.`;
   }
   if (constraint) {
     instruction = `${constraint}${instruction}`;
