@@ -1,5 +1,5 @@
 import sharp from 'sharp';
-import { buildPrompt, COLOR_NAMES } from './prompt.js';
+import { buildPrompt } from './prompt.js';
 import { supabase } from './supabase.js';
 
 const GEMINI_IMAGE_URL = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-image:generateContent';
@@ -52,7 +52,6 @@ export interface JobPayload {
   prompt: string;
   samples: { name: string; url: string }[];
   mask?: string;
-  maskRegions?: { sampleIndex: number; mask: string }[];
   inputImageUrl?: string;
   projectType: string | null;
 }
@@ -196,19 +195,12 @@ export async function processJob(
   projectType: string | null,
   payload: JobPayload
 ): Promise<string> {
-  const { prompt, samples, mask: maskImageUrl, maskRegions: rawMaskRegions, inputImageUrl: rawInputImageUrl } =
-    payload;
-  const maskRegions = Array.isArray(rawMaskRegions)
-    ? rawMaskRegions.filter(
-        (r) => r && typeof r.sampleIndex === 'number' && typeof r.mask === 'string' && r.mask.trim().length > 0
-      )
-    : [];
-  const hasMask =
-    !!(maskImageUrl && typeof maskImageUrl === 'string' && maskImageUrl.trim().length > 0) || maskRegions.length > 0;
+  const { prompt, samples, mask: maskImageUrl, inputImageUrl: rawInputImageUrl } = payload;
+  const hasMask = !!(maskImageUrl && typeof maskImageUrl === 'string' && maskImageUrl.trim().length > 0);
 
   const maskedBackend = geminiApiKey ? 'Gemini (Nano Banana)' : 'none';
   console.log(
-    `[processJob] project=${projectId} hasMask=${hasMask} maskRegions=${maskRegions.length} maskImageUrl=${!!maskImageUrl} → ${hasMask ? maskedBackend : 'OpenAI'}`
+    `[processJob] project=${projectId} hasMask=${hasMask} maskImageUrl=${!!maskImageUrl} → ${hasMask ? maskedBackend : 'OpenAI'}`
   );
 
   const baseUrl =
@@ -219,7 +211,7 @@ export async function processJob(
   let lastResultB64: string;
 
   if (hasMask) {
-    const maskUrl = maskImageUrl?.trim() ?? maskRegions[0]?.mask ?? null;
+    const maskUrl = maskImageUrl?.trim() ?? null;
     if (!maskUrl) throw new Error('Mask required for masked edit');
 
     if (!geminiApiKey) {
@@ -228,47 +220,14 @@ export async function processJob(
       );
     }
 
-    const runMasked = async (
-      imgUrl: string,
-      mask: string,
-      fullPrompt: string,
-      refUrl: string | null
-    ): Promise<string> => {
-      return runGeminiNanoBananaInpaint(geminiApiKey!, imgUrl, mask, fullPrompt, refUrl);
-    };
-
-    if (maskRegions.length > 1) {
-      let currentImageUrl = baseUrl;
-      for (let i = 0; i < maskRegions.length; i++) {
-        const region = maskRegions[i];
-        const sampleName = samples[region.sampleIndex]?.name || `Sample ${region.sampleIndex + 1}`;
-        const colorName = COLOR_NAMES[region.sampleIndex] ?? `sample ${region.sampleIndex + 1}`;
-        const regionPrompt = buildPrompt(prompt, projectType, true, {
-          sampleIndex: region.sampleIndex,
-          sampleName,
-          colorName,
-        });
-        const refUrl = samples[region.sampleIndex]?.url?.trim() || null;
-        const dataUrl = await runMasked(currentImageUrl, region.mask, regionPrompt, refUrl);
-        currentImageUrl = dataUrl;
-      }
-      lastResultB64 = currentImageUrl.replace(/^data:image\/\w+;base64,/, '');
-    } else {
-      const fullPrompt =
-        maskRegions.length === 1
-          ? buildPrompt(prompt, projectType, true, {
-              sampleIndex: maskRegions[0].sampleIndex,
-              sampleName: samples[maskRegions[0].sampleIndex]?.name || `Sample ${maskRegions[0].sampleIndex + 1}`,
-              colorName: COLOR_NAMES[maskRegions[0].sampleIndex] ?? `sample ${maskRegions[0].sampleIndex + 1}`,
-            })
-          : buildPrompt(prompt, projectType, true);
-      const refUrl =
-        maskRegions.length === 1
-          ? (samples[maskRegions[0]!.sampleIndex]?.url?.trim() || null)
-          : (samples[0]?.url?.trim() || null);
-      const dataUrl = await runMasked(baseUrl, maskUrl, fullPrompt, refUrl);
-      lastResultB64 = dataUrl.replace(/^data:image\/\w+;base64,/, '');
-    }
+    const fullPrompt = buildPrompt(prompt, projectType, true, {
+      sampleIndex: 0,
+      sampleName: samples[0]?.name || 'Sample 1',
+      colorName: 'red',
+    });
+    const refUrl = samples[0]?.url?.trim() || null;
+    const dataUrl = await runGeminiNanoBananaInpaint(geminiApiKey, baseUrl, maskUrl, fullPrompt, refUrl);
+    lastResultB64 = dataUrl.replace(/^data:image\/\w+;base64,/, '');
   } else {
     // Route to OpenAI Image Edits — no mask
     const fullPrompt = buildPrompt(prompt, projectType, false);

@@ -5,7 +5,7 @@ import { supabase } from './supabaseClient';
 import { processAiRenovation } from './aiService';
 import { checkRenderingLimit } from './utils/planLimits';
 import { getTrialInfo } from './utils/trialTracking';
-import { createEditMaskFromBrushCanvas, createEditMaskForColor, getColorsWithStrokes, getImageDimensionsFromUrl, uploadMaskToStorage } from './utils/maskProcessing';
+import { createEditMaskFromBrushCanvas, getImageDimensionsFromUrl, uploadMaskToStorage } from './utils/maskProcessing';
 import { convertHeicToJpegIfNeeded } from './utils/heicConversion';
 import { TrashIcon, SparklesIcon, ArrowDownTrayIcon, ArrowLeftIcon, PaintBrushIcon, XMarkIcon, ArrowUturnLeftIcon } from '@heroicons/react/24/outline';
 
@@ -160,26 +160,23 @@ export default function WorkspaceEditor({
   const handleSwatchUpload = async (e) => {
     const input = e.target;
     if (!input.files?.length) return;
-    const files = Array.from(input.files);
+    const file = input.files[0];
     input.value = '';
-    const hasHeic = files.some((f) => /\.(heic|heif)$/i.test(f.name));
-    if (hasHeic) toast.info('Converting HEIC images…');
+    const hasHeic = /\.(heic|heif)$/i.test(file?.name || '');
+    if (hasHeic) toast.info('Converting HEIC image…');
     try {
-      const converted = await Promise.all(files.map((f) => convertHeicToJpegIfNeeded(f)));
-      const newSwatches = converted.map((file, index) => {
-        const colorIndex = (swatches.length + index) % SWATCH_COLORS.length;
-        const color = SWATCH_COLORS[colorIndex];
-        const id = Math.random().toString(36).substring(7);
-        const name = `Sample ${swatches.length + index + 1}`;
-        return { id, file, previewUrl: URL.createObjectURL(file), color, name };
-      });
-      setSwatches((prev) => {
-        const updated = [...prev, ...newSwatches];
-        if (!activeSwatchId && updated.length > 0) setActiveSwatchId(updated[0].id);
-        return updated;
-      });
+      const converted = await convertHeicToJpegIfNeeded(file);
+      const swatch = {
+        id: Math.random().toString(36).substring(7),
+        file: converted,
+        previewUrl: URL.createObjectURL(converted),
+        color: SWATCH_COLORS[0],
+        name: 'Reference',
+      };
+      setSwatches([swatch]);
+      setActiveSwatchId(swatch.id);
     } catch (err) {
-      toast.error('Failed to process some images. Please try JPEG or PNG.');
+      toast.error('Failed to process image. Please try JPEG or PNG.');
     }
   };
 
@@ -447,6 +444,12 @@ export default function WorkspaceEditor({
         setIsGenerating(false);
         return;
       }
+      const hasBrush = hasBrushStrokes();
+      if (hasBrush && swatches.length === 0) {
+        toast.error('Add a reference image to apply to the masked area.');
+        setIsGenerating(false);
+        return;
+      }
 
       const newProject = await processAiRenovation(
         userId,
@@ -468,7 +471,6 @@ export default function WorkspaceEditor({
         url: s.url,
       }));
       let maskUrl = null;
-      let maskRegions = null;
       const ts = Date.now();
       if (hasBrushStrokes() && brushCanvasRef.current) {
         let maskSize;
@@ -477,19 +479,8 @@ export default function WorkspaceEditor({
         } catch (e) {
           maskSize = imageNaturalSize || { w: 1024, h: 1024 };
         }
-        const colorsWithStrokes = getColorsWithStrokes(brushCanvasRef.current, swatches);
-        if (colorsWithStrokes.length >= 1) {
-          maskRegions = await Promise.all(
-            colorsWithStrokes.map(async (sampleIndex, idx) => {
-              const dataUrl = await createEditMaskForColor(brushCanvasRef.current, maskSize, swatches[sampleIndex].color);
-              const url = await uploadMaskToStorage(dataUrl, userId, projectId, ts, idx);
-              return { sampleIndex, mask: url };
-            })
-          );
-        } else {
-          const dataUrl = await createEditMaskFromBrushCanvas(brushCanvasRef.current, maskSize);
-          maskUrl = await uploadMaskToStorage(dataUrl, userId, projectId, ts);
-        }
+        const dataUrl = await createEditMaskFromBrushCanvas(brushCanvasRef.current, maskSize);
+        maskUrl = await uploadMaskToStorage(dataUrl, userId, projectId, ts);
       }
       const { data: fnData, error: fnError } = await supabase.functions.invoke('generate-image', {
         body: {
@@ -497,7 +488,6 @@ export default function WorkspaceEditor({
           prompt: trimmedPrompt,
           samples,
           mask: maskUrl || undefined,
-          maskRegions: maskRegions || undefined,
           inputImageUrl: editFromImageUrl || undefined,
         },
       });
@@ -909,30 +899,16 @@ export default function WorkspaceEditor({
                     />
                     <span className="text-slate-600 w-8">{brushSize}</span>
                   </label>
-                  {swatches.length > 0 && (
-                    <div className="flex items-center gap-1">
-                      {swatches.map((s, i) => (
-                        <button
-                          key={s.id}
-                          type="button"
-                          onClick={() => { setActiveSwatchId(s.id); setBrushColor(s.color); }}
-                          className={`w-6 h-6 rounded-full border-2 ${activeSwatchId === s.id ? 'border-blue-600 scale-110' : 'border-slate-300'}`}
-                          style={{ backgroundColor: s.color }}
-                          title={`Paint for ${s.name || `Sample ${i + 1}`} (${['red','green','yellow','purple','orange'][i] || ''})`}
-                        />
-                      ))}
-                    </div>
-                  )}
                   <button type="button" onClick={handleUndoBrush} disabled={!canUndoBrush} className="text-slate-500 hover:text-blue-600 text-xs flex items-center gap-1 disabled:opacity-50" title="Undo last stroke">
                     <ArrowUturnLeftIcon className="h-4 w-4" /> Undo
                   </button>
                   <button type="button" onClick={handleClearBrush} className="text-slate-500 hover:text-red-600 text-xs flex items-center gap-1">
                     <XMarkIcon className="h-4 w-4" /> Clear
                   </button>
-                  <span className="text-slate-500 text-xs">Red=Sample 1, Green=Sample 2, etc. Refer to your sample names in the prompt.</span>
+                  <span className="text-slate-500 text-xs">Paint the area to edit. Add another material later by editing the render.</span>
                 </>
               ) : (
-                <span className="text-slate-500 text-xs">Refer to your sample names in your instructions. Use Brush to mask specific areas.</span>
+                <span className="text-slate-500 text-xs">Use Brush to mask the area you want to edit. Add a reference image below.</span>
               )}
             </div>
           )}
@@ -958,7 +934,7 @@ export default function WorkspaceEditor({
           </div>
           <div>
             <label className="block text-xs font-bold text-slate-500 mb-2 uppercase">
-              Reference samples
+              Reference image
             </label>
             <div className="flex flex-wrap items-start gap-3">
               {swatches.map((swatch, index) => (
@@ -1003,20 +979,19 @@ export default function WorkspaceEditor({
                 <div className="h-12 w-12 border-2 border-dashed border-slate-300 rounded-lg flex items-center justify-center hover:bg-slate-50 flex-shrink-0 relative">
                   <input
                     type="file"
-                    multiple
                     accept="image/*,.heic,.heif"
                     onChange={handleSwatchUpload}
                     className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
                   />
-                  <span className="text-slate-400 pointer-events-none">+</span>
+                  <span className="text-slate-400 pointer-events-none">{swatches.length > 0 ? 'Replace' : '+'}</span>
                 </div>
-                <span className="text-xs font-medium text-slate-600">Add</span>
+                <span className="text-xs font-medium text-slate-600">{swatches.length > 0 ? 'Replace' : 'Add'}</span>
                 <div className="h-4 w-4" aria-hidden="true" />
               </div>
             </div>
             {swatches.length > 0 && (
               <p className="text-xs text-slate-500 mt-2">
-                Each sample has a colour (red, green, yellow, etc.) for masking. Refer to sample names in your prompt.
+                One reference per edit. To add another material, generate first, then edit the render and add a new reference.
               </p>
             )}
           </div>
@@ -1027,7 +1002,7 @@ export default function WorkspaceEditor({
             <textarea
               value={customPrompt}
               onChange={(e) => setCustomPrompt(e.target.value)}
-              placeholder="e.g. Replace the red brick with the stone in Sample 1 photo"
+              placeholder="e.g. Apply the brick material to the masked area"
               rows="3"
               className="input-modern text-sm resize-none w-full"
             />

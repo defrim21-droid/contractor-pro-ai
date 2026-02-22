@@ -36,7 +36,6 @@ serve(async (req) => {
     prompt?: string;
     samples?: { name: string; url: string }[];
     mask?: string;
-    maskRegions?: { sampleIndex: number; mask: string }[];
     inputImageUrl?: string;
   };
   try {
@@ -48,7 +47,7 @@ serve(async (req) => {
     );
   }
 
-  const { projectId, prompt, samples: rawSamples, mask: maskImageUrl, maskRegions: rawMaskRegions, inputImageUrl: rawInputImageUrl } = body;
+  const { projectId, prompt, samples: rawSamples, mask: maskImageUrl, inputImageUrl: rawInputImageUrl } = body;
   const samples = Array.isArray(rawSamples)
     ? rawSamples.filter((s) => s && typeof s.url === 'string' && s.url.trim().length > 0)
     : [];
@@ -105,16 +104,10 @@ serve(async (req) => {
     );
   }
 
-  const maskRegions = Array.isArray(rawMaskRegions)
-    ? rawMaskRegions.filter((r) => r && typeof r.sampleIndex === 'number' && typeof r.mask === 'string' && r.mask.trim().length > 0)
-    : [];
-  const hasMask = !!(maskImageUrl && typeof maskImageUrl === 'string' && maskImageUrl.trim().length > 0) || maskRegions.length > 0;
-
   const payload = {
     prompt: prompt.trim(),
     samples,
     mask: maskImageUrl && typeof maskImageUrl === 'string' && maskImageUrl.trim().length > 0 ? maskImageUrl.trim() : undefined,
-    maskRegions: maskRegions.length > 0 ? maskRegions : undefined,
     inputImageUrl: rawInputImageUrl && typeof rawInputImageUrl === 'string' && rawInputImageUrl.trim().length > 0 ? rawInputImageUrl.trim() : undefined,
     projectType,
   };
