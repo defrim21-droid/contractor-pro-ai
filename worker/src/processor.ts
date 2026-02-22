@@ -250,7 +250,7 @@ async function runNanoBananaInpaint(
   userId: string,
   projectId: string
 ): Promise<string> {
-  const replicate = new Replicate({ auth: replicateToken });
+  const replicate = new Replicate({ auth: replicateToken, useFileOutput: false });
 
   const dims = await getImageDimensions(inputImageUrl);
   const markupBuffer = await createMarkupImage(
@@ -289,15 +289,41 @@ async function runNanoBananaInpaint(
     },
   });
 
+  const extractUrl = (v: unknown): string | undefined => {
+    if (typeof v === 'string') return v.startsWith('http') ? v : undefined;
+    if (v instanceof URL) return v.href;
+    if (v != null && typeof v === 'object' && typeof (v as { toString?: () => string }).toString === 'function') {
+      const s = (v as { toString: () => string }).toString();
+      if (s.startsWith('http')) return s;
+    }
+    if (v && typeof v === 'object' && 'href' in v) return String((v as { href: unknown }).href);
+    if (v && typeof v === 'object' && 'url' in v) {
+      const u = (v as { url: unknown }).url;
+      if (typeof u === 'function') {
+        const r = (u as () => URL | string)();
+        return r instanceof URL ? r.href : typeof r === 'string' ? r : undefined;
+      }
+      return typeof u === 'string' ? u : undefined;
+    }
+    return undefined;
+  };
+
   let resultUrl: string | undefined;
-  if (typeof output === 'string') resultUrl = output;
-  else if (output && typeof (output as { url: () => string }).url === 'function')
-    resultUrl = (output as { url: () => string }).url();
-  else if (Array.isArray(output) && output[0])
-    resultUrl = typeof output[0] === 'string' ? output[0] : (output[0] as { url?: () => string })?.url?.();
-  else resultUrl = (output as { url?: string })?.url;
+  if (typeof output === 'string' && output.startsWith('http')) {
+    resultUrl = output;
+  } else if (Array.isArray(output) && output.length > 0) {
+    resultUrl = extractUrl(output[0]);
+  } else if (output != null && typeof output === 'object') {
+    const o = output as Record<string, unknown>;
+    resultUrl =
+      extractUrl(o.output) ??
+      extractUrl(o.url) ??
+      (typeof o.url === 'function' ? extractUrl((o.url as () => unknown)()) : undefined);
+  }
 
   if (!resultUrl || typeof resultUrl !== 'string') {
+    const debug = output == null ? 'null' : typeof output === 'object' ? JSON.stringify(output).slice(0, 500) : String(output);
+    console.error('[runNanoBananaInpaint] Unparsed output:', debug);
     throw new Error('No image in Nano Banana Pro response');
   }
 
