@@ -140,7 +140,7 @@ async function runGeminiNanoBananaInpaint(
   const refConstraint =
     'The reference image may contain multiple materials. Use ONLY the specific material named (e.g. brick, stucco). Ignore all other materials. ';
   const maskInstruction =
-    'Edit ONLY the marked (red overlay) areas. Do not modify any other parts of the image. ';
+    'CRITICAL: Modify ONLY the red overlay area. Do NOT change, recolor, or apply material to ANY pixel outside the red overlay. Every pixel outside the red area must remain EXACTLY as in the input image—do not extend, blend, or bleed the material beyond the red boundary. Preserve all non-red areas unchanged. ';
   const prompt = referenceImageUrl
     ? `${refConstraint}Apply the material and style from the second reference image to the marked areas only. ${maskInstruction}${editPrompt}`
     : `${maskInstruction}${editPrompt}`;
