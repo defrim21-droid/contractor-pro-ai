@@ -27,11 +27,7 @@ async function createMarkupImage(
     resolveMaskToBuffer(baseImageUrl),
     (async () => {
       const buf = await resolveMaskToBuffer(maskInput);
-      const resized = await sharp(buf)
-        .resize(width, height, { kernel: sharp.kernel.nearest })
-        .ensureAlpha()
-        .raw()
-        .toBuffer({ resolveWithObject: true });
+      const resized = await sharp(buf).resize(width, height).ensureAlpha().raw().toBuffer({ resolveWithObject: true });
       return resized;
     })(),
   ]);
@@ -83,15 +79,6 @@ async function resizeMaskToMatch(maskDataUrl: string, targetW: number, targetH: 
   const meta = await sharp(input).metadata();
   if (meta.width === targetW && meta.height === targetH) return maskDataUrl;
   const out = await sharp(input).resize(targetW, targetH).png().toBuffer();
-  return `data:image/png;base64,${out.toString('base64')}`;
-}
-
-/** Resize image to target dimensions so masks created for original size align correctly. */
-async function resizeImageToDimensions(imageUrl: string, targetW: number, targetH: number): Promise<string> {
-  const buf = await resolveMaskToBuffer(imageUrl);
-  const meta = await sharp(buf).metadata();
-  if (meta.width === targetW && meta.height === targetH) return imageUrl;
-  const out = await sharp(buf).resize(targetW, targetH).png().toBuffer();
   return `data:image/png;base64,${out.toString('base64')}`;
 }
 
@@ -251,7 +238,6 @@ export async function processJob(
     };
 
     if (maskRegions.length > 1) {
-      const baseDims = await getImageDimensions(baseUrl);
       let currentImageUrl = baseUrl;
       for (let i = 0; i < maskRegions.length; i++) {
         const region = maskRegions[i];
@@ -263,11 +249,8 @@ export async function processJob(
           colorName,
         });
         const refUrl = samples[region.sampleIndex]?.url?.trim() || null;
-        console.log(
-          `[processJob] region ${i + 1}/${maskRegions.length} sampleIndex=${region.sampleIndex} sampleName="${sampleName}" hasRef=${!!refUrl}`
-        );
         const dataUrl = await runMasked(currentImageUrl, region.mask, regionPrompt, refUrl);
-        currentImageUrl = await resizeImageToDimensions(dataUrl, baseDims.w, baseDims.h);
+        currentImageUrl = dataUrl;
       }
       lastResultB64 = currentImageUrl.replace(/^data:image\/\w+;base64,/, '');
     } else {
