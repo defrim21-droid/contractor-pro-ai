@@ -9,7 +9,8 @@ import { GoogleAuth } from 'google-auth-library';
 const IMAGEN_MODEL = 'imagen-3.0-capability-001';
 const EDIT_MODE = 'EDIT_MODE_INPAINT_INSERTION';
 const MASK_DILATION = 0.01;
-const GUIDANCE_SCALE = 25;
+/** Edit API default for insert mode; higher = stronger adherence to prompt and style. */
+const GUIDANCE_SCALE = 60;
 const BASE_STEPS = 35;
 
 /** Max dimension to stay under Vertex image size limit (~27M chars base64). */
@@ -220,6 +221,7 @@ export async function runVertexImagenInpaint(input: VertexImagenInput): Promise<
   }
 
   const prompt = buildPromptWrapper(input.userPrompt, !!paddedRef);
+  console.log(`[Vertex] refs=${referenceImages.length} hasStyleRef=${!!paddedRef} promptLen=${prompt.length}`);
 
   const body = {
     instances: [

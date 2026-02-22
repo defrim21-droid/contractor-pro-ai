@@ -226,6 +226,7 @@ export async function processJob(
 
     if (useVertexForMask && vertexProjectId) {
       const refUrl = samples[0]?.url?.trim() || null;
+      console.log(`[processJob] Vertex inpaint: refSwatch=${!!refUrl} prompt=${payload.prompt?.slice(0, 60)}...`);
       const dataUrl = await runVertexImagenInpaint({
         baseImageUrl: baseUrl,
         maskImageUrl: maskUrl,
