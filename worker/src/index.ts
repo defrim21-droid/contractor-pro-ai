@@ -66,12 +66,11 @@ async function pollAndProcess(): Promise<void> {
   }
 
   try {
-    const replicateKey = process.env.REPLICATE_API_TOKEN;
+    const geminiApiKey = process.env.GEMINI_API_KEY;
 
     const generatedUrl = await processJob(
       openaiKey,
-      undefined,
-      replicateKey,
+      geminiApiKey,
       projectId,
       userId,
       project.original_image_url,

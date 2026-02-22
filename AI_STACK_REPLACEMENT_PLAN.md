@@ -210,7 +210,7 @@ Below: model choices, rationale, GPU memory, and latency. All assume single imag
 **Recommended:** **Lightweight inpainting or “boundary harmonization”** with:
 
 - **Stable Diffusion Inpainting** or **LaMa** or **ProPainter-style** inpainting, restricted to a **narrow band** (e.g. 5–15 px) at the mask boundary, prompt: “seamless blend, match lighting”.  
-- Or a dedicated **image harmonization** model (e.g. iHarmony4-style) if available in your deployment (Replicate/Fal/etc.).
+- Or a dedicated **image harmonization** model (e.g. iHarmony4-style) if available in your deployment (Replicate, etc.).
 
 **Why keep optional:** Deterministic projection already does the heavy lifting; diffusion only fixes residual seam.  
 **GPU memory:** Same as current SD inpainting (~6–10 GB).  

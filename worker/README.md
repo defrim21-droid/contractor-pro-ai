@@ -32,7 +32,9 @@ Processes image generation jobs from the `generation_jobs` queue. Runs on Railwa
 2. Set root directory to `worker`
 3. Build: `npm run build`
 4. Start: `node dist/index.js`
-5. Add env vars: `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `OPENAI_API_KEY`
+5. Add env vars:
+   - `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `OPENAI_API_KEY`
+   - For masked edits (brush strokes): `GEMINI_API_KEY` (get at https://aistudio.google.com/app/apikey)
 
 Or use the Dockerfile:
 

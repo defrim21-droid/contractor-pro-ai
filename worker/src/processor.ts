@@ -1,13 +1,11 @@
 import sharp from 'sharp';
-import { fal } from '@fal-ai/client';
-import Replicate from 'replicate';
 import { buildPrompt, COLOR_NAMES } from './prompt.js';
 import { supabase } from './supabase.js';
 
+const GEMINI_IMAGE_URL = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-image:generateContent';
+
 const OPENAI_EDITS_URL = 'https://api.openai.com/v1/images/edits';
 const BUCKET = 'project-images-public';
-const FAL_MAX_DIMENSION = 1536;
-const FAL_ALIGN = 8; // FLUX requires dimensions divisible by 8
 
 async function resolveMaskToBuffer(maskInput: string): Promise<Buffer> {
   if (maskInput.startsWith('http://') || maskInput.startsWith('https://')) {
@@ -18,7 +16,7 @@ async function resolveMaskToBuffer(maskInput: string): Promise<Buffer> {
   return Buffer.from(base64, 'base64');
 }
 
-/** Create markup image for Nano Banana: base image + red overlay where mask says edit. */
+/** Create markup image for Gemini: base image + red overlay where mask says edit (Nano Banana style). */
 async function createMarkupImage(
   baseImageUrl: string,
   maskInput: string,
@@ -38,7 +36,6 @@ async function createMarkupImage(
   const { data: baseData } = base;
   const { data: maskData } = maskBuffer;
 
-  // Red overlay where mask is transparent (alpha < 128 = edit area) — Nano Banana expects red marks
   for (let i = 0; i < baseData.length; i += 4) {
     const maskA = maskData[i + 3] ?? 255;
     if (maskA < 128) {
@@ -49,25 +46,6 @@ async function createMarkupImage(
   }
 
   return sharp(baseData, { raw: { width, height, channels: 4 } }).png().toBuffer();
-}
-
-/** Fal.ai mask: white = inpaint, black = preserve. Our mask: transparent = edit, opaque = preserve. Returns PNG buffer. */
-async function convertMaskToFalFormatBuffer(
-  maskInput: string,
-  width: number,
-  height: number
-): Promise<Buffer> {
-  const input = await resolveMaskToBuffer(maskInput);
-  const { data } = await sharp(input).ensureAlpha().resize(width, height).raw().toBuffer({ resolveWithObject: true });
-  for (let i = 0; i < data.length; i += 4) {
-    const a = data[i + 3]!;
-    const v = a < 128 ? 255 : 0; // transparent (edit) → white, opaque (preserve) → black
-    data[i] = v;
-    data[i + 1] = v;
-    data[i + 2] = v;
-    data[i + 3] = 255;
-  }
-  return sharp(data, { raw: { width, height, channels: 4 } }).png().toBuffer();
 }
 
 export interface JobPayload {
@@ -148,195 +126,70 @@ async function runEdit(
   return `data:image/png;base64,${b64}`;
 }
 
-/** Resize image to fit within max dimension; align to FAL_ALIGN (FLUX requires div-by-8). */
-async function resizeImageForFal(
-  imageUrl: string,
-  targetW?: number,
-  targetH?: number
-): Promise<{ buffer: Buffer; w: number; h: number }> {
-  const buffer = await resolveMaskToBuffer(imageUrl);
-  const meta = await sharp(buffer).metadata();
-  let w = meta.width ?? 1024;
-  let h = meta.height ?? 1024;
-  if (targetW != null && targetH != null) {
-    w = targetW;
-    h = targetH;
-  } else {
-    const scale =
-      w > FAL_MAX_DIMENSION || h > FAL_MAX_DIMENSION ? FAL_MAX_DIMENSION / Math.max(w, h) : 1;
-    w = Math.round(w * scale);
-    h = Math.round(h * scale);
-    w = Math.floor(w / FAL_ALIGN) * FAL_ALIGN;
-    h = Math.floor(h / FAL_ALIGN) * FAL_ALIGN;
-    w = Math.max(FAL_ALIGN, w);
-    h = Math.max(FAL_ALIGN, h);
-  }
-  const resized = await sharp(buffer).resize(w, h).png().toBuffer();
-  return { buffer: resized, w, h };
-}
-
-/** Upload buffer to Fal storage. */
-async function uploadToFalStorage(falKey: string, buffer: Buffer, type = 'image/png'): Promise<string> {
-  fal.config({ credentials: falKey });
-  const blob = new Blob([new Uint8Array(buffer)], { type });
-  return fal.storage.upload(blob);
-}
-
-/** Fal.ai Flux General inpainting — strict mask adherence + reference image (IP-Adapter-style). */
-async function runFalFluxInpaint(
-  falKey: string,
+/** Gemini API (Nano Banana) — markup image + reference image + prompt. Uses API key auth. */
+async function runGeminiNanoBananaInpaint(
+  geminiApiKey: string,
   inputImageUrl: string,
   maskInput: string,
   editPrompt: string,
   referenceImageUrl: string | null
 ): Promise<string> {
-  fal.config({ credentials: falKey });
-
-  // Resize input to Fal limits; mask and reference must match resized dimensions
-  const { buffer: inputBuffer, w: targetW, h: targetH } = await resizeImageForFal(inputImageUrl);
-  const maskBuffer = await convertMaskToFalFormatBuffer(maskInput, targetW, targetH);
-
-  // Upload to Fal storage; reference disabled—flux-general inpainting has tensor mismatch with reference_image_url
-  const [inputImageFalUrl, maskUrl] = await Promise.all([
-    uploadToFalStorage(falKey, inputBuffer),
-    uploadToFalStorage(falKey, maskBuffer),
-  ]);
-
-  const input: Record<string, unknown> = {
-    prompt: editPrompt,
-    image_url: inputImageFalUrl,
-    mask_url: maskUrl,
-    negative_prompt:
-      'blurry, low quality, distorted, cartoon, painting, illustration, moldings, window trim, decorative trim, added trim, new trim, architectural ornamentation, extra elements outside mask',
-    strength: 0.82,
-  };
-
-  // Note: reference_image_url causes "tensor a (8) must match tensor b (2)" in flux-general inpainting.
-  // Rely on prompt describing the material from the reference instead.
-
-  let result;
-  try {
-    result = await fal.subscribe('fal-ai/flux-general/inpainting', {
-      input: input as any,
-      logs: true,
-    });
-  } catch (err) {
-    const e = err as any;
-    const detail = e?.detail ?? e?.body ?? (typeof e?.json === 'function' ? await e.json().catch(() => null) : null);
-    const errStr = typeof detail === 'object' ? JSON.stringify(detail) : String(detail ?? '');
-    const msg = err instanceof Error ? err.message : String(err);
-    console.error(`[runFalFluxInpaint] Fal API error: status=${e?.status} detail=${errStr} message=${msg}`);
-    const userMsg = Array.isArray(detail) && detail[0]?.msg ? detail[0].msg : msg;
-    throw new Error(userMsg || 'Fal inpainting failed');
-  }
-
-  const images = (result.data as { images?: { url?: string }[] })?.images;
-  const resultImageUrl = images?.[0]?.url;
-  if (!resultImageUrl) throw new Error('No image in Fal inpainting response');
-
-  const resp = await fetch(resultImageUrl);
-  const ab = await resp.arrayBuffer();
-  const b64 = Buffer.from(ab).toString('base64');
-  return `data:image/png;base64,${b64}`;
-}
-
-/** Replicate Nano Banana Pro — mask + reference image editing. */
-async function runNanoBananaInpaint(
-  replicateToken: string,
-  inputImageUrl: string,
-  maskInput: string,
-  editPrompt: string,
-  referenceImageUrl: string | null,
-  userId: string,
-  projectId: string
-): Promise<string> {
-  const replicate = new Replicate({ auth: replicateToken, useFileOutput: false });
-
   const dims = await getImageDimensions(inputImageUrl);
-  const markupBuffer = await createMarkupImage(
-    inputImageUrl,
-    maskInput,
-    dims.w,
-    dims.h
-  );
-
-  // Upload markup to Supabase for public URL (Replicate needs fetchable URL)
-  const markupPath = `uploads/${userId}/${projectId}-markup-${Date.now()}.png`;
-  const { error: uploadErr } = await supabase.storage.from(BUCKET).upload(markupPath, markupBuffer, {
-    contentType: 'image/png',
-    upsert: true,
-  });
-  if (uploadErr) throw new Error(`Markup upload failed: ${uploadErr.message}`);
-  const { data: markupUrlData } = supabase.storage.from(BUCKET).getPublicUrl(markupPath);
-  const markupUrl = markupUrlData.publicUrl;
-
-  const imageInput: string[] = [markupUrl];
-  if (referenceImageUrl?.trim()) imageInput.push(referenceImageUrl.trim());
+  const markupBuffer = await createMarkupImage(inputImageUrl, maskInput, dims.w, dims.h);
+  const markupB64 = markupBuffer.toString('base64');
 
   const refConstraint =
-    'The reference image may contain multiple materials. Use ONLY the specific material the user names (e.g. brick, stucco). Ignore all other materials in the reference. ';
-  const prompt =
-    imageInput.length > 1
-      ? `${refConstraint}Apply the material and style from the second reference image to the red marked areas only. Edit ONLY the red areas—do not modify any other parts of the image. ${editPrompt}`
-      : `Edit only the red marked areas according to the instructions. Do not modify any other parts of the image. ${editPrompt}`;
+    'The reference image may contain multiple materials. Use ONLY the specific material the user names (e.g. brick, stucco). Ignore all other materials. ';
+  const maskInstruction =
+    'Edit ONLY the red marked areas. Do not modify any other parts of the image. ';
+  const prompt = referenceImageUrl
+    ? `${refConstraint}Apply the material and style from the second reference image to the red marked areas only. ${maskInstruction}${editPrompt}`
+    : `${maskInstruction}${editPrompt}`;
 
-  const output = await replicate.run('google/nano-banana-pro', {
-    input: {
-      prompt,
-      image_input: imageInput,
-      aspect_ratio: 'match_input_image',
-      output_format: 'png',
+  const parts: Array<{ text: string } | { inlineData: { mimeType: string; data: string } }> = [
+    { text: prompt },
+    { inlineData: { mimeType: 'image/png', data: markupB64 } },
+  ];
+  if (referenceImageUrl?.trim()) {
+    const refBuffer = await resolveMaskToBuffer(referenceImageUrl.trim());
+    parts.push({ inlineData: { mimeType: 'image/png', data: refBuffer.toString('base64') } });
+  }
+
+  const url = `${GEMINI_IMAGE_URL}?key=${encodeURIComponent(geminiApiKey)}`;
+  const body = {
+    contents: [{ role: 'user', parts }],
+    generationConfig: {
+      responseModalities: ['IMAGE'],
     },
-  });
-
-  const extractUrl = (v: unknown): string | undefined => {
-    if (typeof v === 'string') return v.startsWith('http') ? v : undefined;
-    if (v instanceof URL) return v.href;
-    if (v != null && typeof v === 'object' && typeof (v as { toString?: () => string }).toString === 'function') {
-      const s = (v as { toString: () => string }).toString();
-      if (s.startsWith('http')) return s;
-    }
-    if (v && typeof v === 'object' && 'href' in v) return String((v as { href: unknown }).href);
-    if (v && typeof v === 'object' && 'url' in v) {
-      const u = (v as { url: unknown }).url;
-      if (typeof u === 'function') {
-        const r = (u as () => URL | string)();
-        return r instanceof URL ? r.href : typeof r === 'string' ? r : undefined;
-      }
-      return typeof u === 'string' ? u : undefined;
-    }
-    return undefined;
   };
 
-  let resultUrl: string | undefined;
-  if (typeof output === 'string' && output.startsWith('http')) {
-    resultUrl = output;
-  } else if (Array.isArray(output) && output.length > 0) {
-    resultUrl = extractUrl(output[0]);
-  } else if (output != null && typeof output === 'object') {
-    const o = output as Record<string, unknown>;
-    resultUrl =
-      extractUrl(o.output) ??
-      extractUrl(o.url) ??
-      (typeof o.url === 'function' ? extractUrl((o.url as () => unknown)()) : undefined);
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+
+  if (!res.ok) {
+    const errText = await res.text();
+    throw new Error(`Gemini API failed: ${res.status} ${errText}`);
   }
 
-  if (!resultUrl || typeof resultUrl !== 'string') {
-    const debug = output == null ? 'null' : typeof output === 'object' ? JSON.stringify(output).slice(0, 500) : String(output);
-    console.error('[runNanoBananaInpaint] Unparsed output:', debug);
-    throw new Error('No image in Nano Banana Pro response');
-  }
+  const data = (await res.json()) as {
+    candidates?: Array<{
+      content?: { parts?: Array<{ inlineData?: { mimeType?: string; data?: string } }> };
+    }>;
+  };
+  const partsOut = data?.candidates?.[0]?.content?.parts;
+  const imgPart = partsOut?.find((p) => p.inlineData?.data);
+  const b64 = imgPart?.inlineData?.data;
+  if (!b64) throw new Error('No image in Gemini response');
 
-  const resp = await fetch(resultUrl);
-  const ab = await resp.arrayBuffer();
-  const b64 = Buffer.from(ab).toString('base64');
   return `data:image/png;base64,${b64}`;
 }
 
 export async function processJob(
   openaiKey: string,
-  _falKey: string | undefined,
-  replicateKey: string | undefined,
+  geminiApiKey: string | undefined,
   projectId: string,
   userId: string,
   baseImageUrl: string,
@@ -353,7 +206,7 @@ export async function processJob(
   const hasMask =
     !!(maskImageUrl && typeof maskImageUrl === 'string' && maskImageUrl.trim().length > 0) || maskRegions.length > 0;
 
-  const maskedBackend = replicateKey ? 'Replicate (Nano Banana Pro)' : 'none';
+  const maskedBackend = geminiApiKey ? 'Gemini (Nano Banana)' : 'none';
   console.log(
     `[processJob] project=${projectId} hasMask=${hasMask} maskRegions=${maskRegions.length} maskImageUrl=${!!maskImageUrl} → ${hasMask ? maskedBackend : 'OpenAI'}`
   );
@@ -369,16 +222,19 @@ export async function processJob(
     const maskUrl = maskImageUrl?.trim() ?? maskRegions[0]?.mask ?? null;
     if (!maskUrl) throw new Error('Mask required for masked edit');
 
+    if (!geminiApiKey) {
+      throw new Error(
+        'GEMINI_API_KEY required for masked edits. Add it to Railway variables. Get one at https://aistudio.google.com/app/apikey'
+      );
+    }
+
     const runMasked = async (
       imgUrl: string,
       mask: string,
       fullPrompt: string,
       refUrl: string | null
     ): Promise<string> => {
-      if (!replicateKey) {
-        throw new Error('REPLICATE_API_TOKEN required for masked edits. Add it to your Railway variables.');
-      }
-      return runNanoBananaInpaint(replicateKey, imgUrl, mask, fullPrompt, refUrl, userId, projectId);
+      return runGeminiNanoBananaInpaint(geminiApiKey!, imgUrl, mask, fullPrompt, refUrl);
     };
 
     if (maskRegions.length > 1) {
