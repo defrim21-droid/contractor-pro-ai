@@ -12,8 +12,8 @@ const MASK_DILATION = 0.01;
 const GUIDANCE_SCALE = 25;
 const BASE_STEPS = 35;
 
-/** Standard size for Vertex (some models prefer square). Pad to this, then crop back. */
-const VERTEX_PREFERRED_SIZE = 1024;
+/** Max dimension to stay under Vertex image size limit (~27M chars base64). */
+const MAX_IMAGE_DIMENSION = 1024;
 
 export interface VertexImagenInput {
   baseImageUrl: string;
@@ -59,9 +59,9 @@ async function convertMaskForVertex(maskBuffer: Buffer, w: number, h: number): P
 }
 
 /**
- * Pad image to Vertex-preferred square size (centered). Crop offsets for result.
+ * Resize image to fit within MAX_IMAGE_DIMENSION, pad to square for Vertex. Preserves aspect ratio.
  */
-async function padToVertexSize(buffer: Buffer): Promise<{
+async function resizeAndPadForVertex(buffer: Buffer): Promise<{
   paddedBuffer: Buffer;
   originalW: number;
   originalH: number;
@@ -75,15 +75,20 @@ async function padToVertexSize(buffer: Buffer): Promise<{
   const h = meta.height ?? 0;
   if (w <= 0 || h <= 0) throw new Error('Invalid image dimensions');
 
-  const side = Math.max(w, h, VERTEX_PREFERRED_SIZE);
-  const paddedW = Math.min(side, 2048);
+  const scale = Math.min(1, MAX_IMAGE_DIMENSION / Math.max(w, h));
+  const resizedW = Math.round(w * scale);
+  const resizedH = Math.round(h * scale);
+  const resized = await sharp(buffer).resize(resizedW, resizedH).png().toBuffer();
+
+  const side = Math.max(resizedW, resizedH, MAX_IMAGE_DIMENSION);
+  const paddedW = Math.min(side, MAX_IMAGE_DIMENSION);
   const paddedH = paddedW;
-  const padW = Math.max(0, paddedW - w);
-  const padH = Math.max(0, paddedH - h);
+  const padW = Math.max(0, paddedW - resizedW);
+  const padH = Math.max(0, paddedH - resizedH);
   const left = Math.floor(padW / 2);
   const top = Math.floor(padH / 2);
 
-  const padded = await sharp(buffer)
+  const padded = await sharp(resized)
     .extend({
       top,
       bottom: padH - top,
@@ -155,9 +160,12 @@ export async function runVertexImagenInpaint(input: VertexImagenInput): Promise<
     paddedH,
     cropLeft,
     cropTop,
-  } = await padToVertexSize(baseBuf);
+  } = await resizeAndPadForVertex(baseBuf);
 
-  const maskAtOrig = await convertMaskForVertex(maskBuf, originalW, originalH);
+  const scale = Math.min(1, MAX_IMAGE_DIMENSION / Math.max(originalW, originalH));
+  const resizedW = Math.round(originalW * scale);
+  const resizedH = Math.round(originalH * scale);
+  const maskAtOrig = await convertMaskForVertex(maskBuf, resizedW, resizedH);
   const padW = paddedW - originalW;
   const padH = paddedH - originalH;
   const left = Math.floor(padW / 2);
@@ -248,18 +256,20 @@ export async function runVertexImagenInpaint(input: VertexImagenInput): Promise<
 
   const resultBuffer = Buffer.from(b64, 'base64');
 
-  if (originalW !== paddedW || originalH !== paddedH) {
-    const cropped = await sharp(resultBuffer)
-      .extract({
-        left: cropLeft,
-        top: cropTop,
-        width: originalW,
-        height: originalH,
-      })
-      .png()
-      .toBuffer();
-    return `data:image/png;base64,${cropped.toString('base64')}`;
-  }
+  const cropped = await sharp(resultBuffer)
+    .extract({
+      left: cropLeft,
+      top: cropTop,
+      width: resizedW,
+      height: resizedH,
+    })
+    .png()
+    .toBuffer();
 
-  return `data:image/png;base64,${b64}`;
+  const final =
+    resizedW === originalW && resizedH === originalH
+      ? cropped
+      : await sharp(cropped).resize(originalW, originalH).png().toBuffer();
+
+  return `data:image/png;base64,${final.toString('base64')}`;
 }
