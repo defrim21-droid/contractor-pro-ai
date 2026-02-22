@@ -134,21 +134,30 @@ async function runGeminiNanoBananaInpaint(
   referenceImageUrl: string | null
 ): Promise<string> {
   const dims = await getImageDimensions(inputImageUrl);
-  const markupBuffer = await createMarkupImage(inputImageUrl, maskInput, dims.w, dims.h);
+  const [baseBuffer, markupBuffer, refBuffer] = await Promise.all([
+    resolveMaskToBuffer(inputImageUrl).then((b) => sharp(b).png().toBuffer()),
+    createMarkupImage(inputImageUrl, maskInput, dims.w, dims.h),
+    referenceImageUrl?.trim()
+      ? resolveMaskToBuffer(referenceImageUrl.trim()).then((b) => sharp(b).png().toBuffer())
+      : Promise.resolve(null),
+  ]);
+  const baseB64 = baseBuffer.toString('base64');
   const markupB64 = markupBuffer.toString('base64');
 
+  const imageMapping = refBuffer
+    ? 'You are receiving three images in this exact order: Image 1 (Base): The original photograph. Image 2 (Mask): The photograph with a red overlay marking the target area. Image 3 (Reference): The material/color swatch. Replace the red overlay entirely with the material from the Reference image as specified in the user instruction. '
+    : 'You are receiving two images in this exact order: Image 1 (Base): The original photograph. Image 2 (Mask): The photograph with a red overlay marking the target area. Replace the red overlay as specified in the user instruction. ';
   const coreDirectives =
-    'Core Directives: 1. You are receiving a base image with a red overlay marking the target area, a reference material image, and a user instruction. ' +
-    '2. Target Area: Replace the red overlay entirely with the material specified in the user instruction, matching the reference image. ' +
-    '3. Preservation: You must keep the underlying pattern and geometry of the masked area the exact same, changing only the surface color and texture to match the reference. Do not alter a single pixel outside the red boundary. ';
-  const prompt = `${coreDirectives}${editPrompt}`;
+    `Core Directives: ${imageMapping}` +
+    'Preservation: Keep the underlying pattern and geometry of the masked area the exact same, changing only the surface color and texture. Do not alter a single pixel outside the red boundary. ';
+  const prompt = `${coreDirectives}User instruction: ${editPrompt}`;
 
   const parts: Array<{ text: string } | { inlineData: { mimeType: string; data: string } }> = [
     { text: prompt },
+    { inlineData: { mimeType: 'image/png', data: baseB64 } },
     { inlineData: { mimeType: 'image/png', data: markupB64 } },
   ];
-  if (referenceImageUrl?.trim()) {
-    const refBuffer = await resolveMaskToBuffer(referenceImageUrl.trim());
+  if (refBuffer) {
     parts.push({ inlineData: { mimeType: 'image/png', data: refBuffer.toString('base64') } });
   }
 
