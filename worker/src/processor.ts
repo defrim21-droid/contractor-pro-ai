@@ -1,6 +1,7 @@
 import sharp from 'sharp';
 import { buildPrompt } from './prompt.js';
 import { supabase } from './supabase.js';
+import { runVertexImagenInpaint } from './vertexImagen.js';
 
 const GEMINI_IMAGE_URL = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-image:generateContent';
 
@@ -205,7 +206,9 @@ export async function processJob(
   const { prompt, samples, mask: maskImageUrl, inputImageUrl: rawInputImageUrl } = payload;
   const hasMask = !!(maskImageUrl && typeof maskImageUrl === 'string' && maskImageUrl.trim().length > 0);
 
-  const maskedBackend = geminiApiKey ? 'Gemini (Nano Banana)' : 'none';
+  const vertexProjectId = process.env.GOOGLE_CLOUD_PROJECT?.trim();
+  const useVertexForMask = hasMask && process.env.VERTEX_IMAGEN_ENABLED === 'true' && !!vertexProjectId;
+  const maskedBackend = useVertexForMask ? 'Vertex Imagen' : geminiApiKey ? 'Gemini' : 'none';
   console.log(
     `[processJob] project=${projectId} hasMask=${hasMask} maskImageUrl=${!!maskImageUrl} → ${hasMask ? maskedBackend : 'OpenAI'}`
   );
@@ -221,16 +224,29 @@ export async function processJob(
     const maskUrl = maskImageUrl?.trim() ?? null;
     if (!maskUrl) throw new Error('Mask required for masked edit');
 
-    if (!geminiApiKey) {
+    if (useVertexForMask && vertexProjectId) {
+      const refUrl = samples[0]?.url?.trim() || null;
+      const dataUrl = await runVertexImagenInpaint({
+        baseImageUrl: baseUrl,
+        maskImageUrl: maskUrl,
+        referenceSwatchUrl: refUrl,
+        userPrompt: prompt.trim(),
+        projectId: vertexProjectId!,
+        location: process.env.VERTEX_LOCATION?.trim() || 'us-central1',
+      });
+      lastResultB64 = dataUrl.replace(/^data:image\/\w+;base64,/, '');
+      console.log(`[processJob] masked edit via Vertex Imagen`);
+    } else if (geminiApiKey) {
+      const fullPrompt = buildPrompt(prompt, projectType, true);
+      const refUrl = samples[0]?.url?.trim() || null;
+      const dataUrl = await runGeminiNanoBananaInpaint(geminiApiKey, baseUrl, maskUrl, fullPrompt, refUrl);
+      lastResultB64 = dataUrl.replace(/^data:image\/\w+;base64,/, '');
+      console.log(`[processJob] masked edit via Gemini`);
+    } else {
       throw new Error(
-        'GEMINI_API_KEY required for masked edits. Add it to Railway variables. Get one at https://aistudio.google.com/app/apikey'
+        'For masked edits, set either VERTEX_IMAGEN_ENABLED=true with GOOGLE_CLOUD_PROJECT, or GEMINI_API_KEY'
       );
     }
-
-    const fullPrompt = buildPrompt(prompt, projectType, true);
-    const refUrl = samples[0]?.url?.trim() || null;
-    const dataUrl = await runGeminiNanoBananaInpaint(geminiApiKey, baseUrl, maskUrl, fullPrompt, refUrl);
-    lastResultB64 = dataUrl.replace(/^data:image\/\w+;base64,/, '');
   } else {
     // Route to OpenAI Image Edits — no mask
     const fullPrompt = buildPrompt(prompt, projectType, false);

@@ -34,7 +34,9 @@ Processes image generation jobs from the `generation_jobs` queue. Runs on Railwa
 4. Start: `node dist/index.js`
 5. Add env vars:
    - `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `OPENAI_API_KEY`
-   - For masked edits (brush strokes): `GEMINI_API_KEY` (get at https://aistudio.google.com/app/apikey)
+   - For masked edits: **Vertex Imagen** (preferred) or **Gemini**
+     - Vertex: `VERTEX_IMAGEN_ENABLED=true`, `GOOGLE_CLOUD_PROJECT`, `VERTEX_LOCATION` (optional, default `us-central1`), plus ADC (e.g. `GOOGLE_APPLICATION_CREDENTIALS`)
+     - Gemini: `GEMINI_API_KEY` (get at https://aistudio.google.com/app/apikey)
 
 Or use the Dockerfile:
 

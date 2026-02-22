@@ -1,8 +1,28 @@
+import fs from 'fs';
+import path from 'path';
+import os from 'os';
 import { supabase } from './supabase.js';
 import { processJob } from './processor.js';
 import type { JobPayload } from './processor.js';
 
 const POLL_INTERVAL_MS = 3000;
+
+/** If GOOGLE_CREDENTIALS_JSON is set (paste the service account JSON), write to temp file for Vertex AI. */
+function setupGoogleCredentials(): void {
+  const json = process.env.GOOGLE_CREDENTIALS_JSON?.trim();
+  if (!json) return;
+  try {
+    JSON.parse(json);
+  } catch {
+    console.warn('GOOGLE_CREDENTIALS_JSON is set but invalid JSON; ignoring');
+    return;
+  }
+  const tmpDir = os.tmpdir();
+  const tmpPath = path.join(tmpDir, `gcp-creds-${Date.now()}.json`);
+  fs.writeFileSync(tmpPath, json, 'utf8');
+  process.env.GOOGLE_APPLICATION_CREDENTIALS = tmpPath;
+  console.log('Vertex AI credentials loaded from GOOGLE_CREDENTIALS_JSON');
+}
 
 async function pollAndProcess(): Promise<void> {
   const openaiKey = process.env.OPENAI_API_KEY;
@@ -124,6 +144,7 @@ async function pollAndProcess(): Promise<void> {
 }
 
 async function run(): Promise<void> {
+  setupGoogleCredentials();
   console.log('Worker started, polling every', POLL_INTERVAL_MS, 'ms');
   while (true) {
     try {
