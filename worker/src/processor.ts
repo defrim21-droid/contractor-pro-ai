@@ -137,13 +137,11 @@ async function runGeminiNanoBananaInpaint(
   const markupBuffer = await createMarkupImage(inputImageUrl, maskInput, dims.w, dims.h);
   const markupB64 = markupBuffer.toString('base64');
 
-  const refInstruction =
-    'The second image is the reference. Identify the material the user names in their instruction (e.g. stucco, brick). Apply only that material. ';
-  const maskInstruction =
-    'Modify ONLY the red overlay area. Do not change anything outside the red area. Preserve all non-red pixels exactly. ';
-  const prompt = referenceImageUrl
-    ? `${refInstruction}${maskInstruction}${editPrompt}`
-    : `${maskInstruction}${editPrompt}`;
+  const coreDirectives =
+    'Core Directives: 1. You are receiving a base image with a red overlay marking the target area, a reference material image, and a user instruction. ' +
+    '2. Target Area: Replace the red overlay entirely with the material specified in the user instruction, matching the reference image. ' +
+    '3. Preservation: You must keep the underlying pattern and geometry of the masked area the exact same, changing only the surface color and texture to match the reference. Do not alter a single pixel outside the red boundary. ';
+  const prompt = `${coreDirectives}${editPrompt}`;
 
   const parts: Array<{ text: string } | { inlineData: { mimeType: string; data: string } }> = [
     { text: prompt },
