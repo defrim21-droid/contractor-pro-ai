@@ -8,10 +8,12 @@ import { GoogleAuth } from 'google-auth-library';
 
 const IMAGEN_MODEL = 'imagen-3.0-capability-001';
 const EDIT_MODE = 'EDIT_MODE_INPAINT_INSERTION';
-const MASK_DILATION = 0.01;
+/** 0 = strict mask boundary; higher values dilate (expand) the edit area. */
+const MASK_DILATION = 0;
 /** Edit API default for insert mode; higher = stronger adherence to prompt and style. */
 const GUIDANCE_SCALE = 60;
-const BASE_STEPS = 35;
+/** Higher steps = better quality. Vertex recommends 35–75 for insert mode. */
+const BASE_STEPS = 55;
 
 /** Max dimension to stay under Vertex image size limit (~27M chars base64). */
 const MAX_IMAGE_DIMENSION = 1024;
@@ -116,15 +118,18 @@ async function resizeAndPadForVertex(buffer: Buffer): Promise<{
  */
 function buildPromptWrapper(userPrompt: string, hasStyleRef: boolean): string {
   const stylePart = hasStyleRef
-    ? 'Apply the material and surface appearance from reference image [3] to the masked area only. '
+    ? 'Apply the material and surface appearance from reference image [3] to the masked area only. Photorealistic, natural lighting, seamless integration. '
     : '';
   return (
     stylePart +
-    'Keep the underlying pattern and geometry of the masked area the exact same (unless otherwise specified). ' +
-    'Change only the color and surface texture. Do not alter any pixel outside the mask boundary. ' +
+    'Strictly confine all changes to the masked region only. Do not modify pixels outside the mask. ' +
+    'Keep the underlying geometry; change only color and surface texture. ' +
     `User instruction: ${userPrompt.trim()}`
   );
 }
+
+const NEGATIVE_PROMPT =
+  'blurry, low quality, cartoon, artificial, fake texture, oversaturated, unnatural, soft edges, halos, bleeding outside mask';
 
 /**
  * Get Google Cloud access token for Vertex AI.
@@ -234,6 +239,7 @@ export async function runVertexImagenInpaint(input: VertexImagenInput): Promise<
       editMode: EDIT_MODE,
       editConfig: { baseSteps: BASE_STEPS },
       guidanceScale: GUIDANCE_SCALE,
+      negativePrompt: NEGATIVE_PROMPT,
       sampleCount: 1,
     },
   };
