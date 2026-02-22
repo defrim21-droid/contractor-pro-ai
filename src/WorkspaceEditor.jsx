@@ -1002,7 +1002,7 @@ export default function WorkspaceEditor({
             <textarea
               value={customPrompt}
               onChange={(e) => setCustomPrompt(e.target.value)}
-              placeholder="e.g. Apply the brick material to the masked area"
+              placeholder="e.g. Apply the stucco from Sample 1 to the masked area"
               rows="3"
               className="input-modern text-sm resize-none w-full"
             />

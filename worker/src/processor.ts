@@ -137,12 +137,12 @@ async function runGeminiNanoBananaInpaint(
   const markupBuffer = await createMarkupImage(inputImageUrl, maskInput, dims.w, dims.h);
   const markupB64 = markupBuffer.toString('base64');
 
-  const refConstraint =
-    'The reference image may contain multiple materials. Use ONLY the specific material named (e.g. brick, stucco). Ignore all other materials. ';
+  const refInstruction =
+    'The second image is the reference. Identify the material the user names in their instruction (e.g. stucco, brick). Apply only that material. ';
   const maskInstruction =
-    'CRITICAL: Modify ONLY the red overlay area. Do NOT change, recolor, or apply material to ANY pixel outside the red overlay. Every pixel outside the red area must remain EXACTLY as in the input image—do not extend, blend, or bleed the material beyond the red boundary. Preserve all non-red areas unchanged. ';
+    'Modify ONLY the red overlay area. Do not change anything outside the red area. Preserve all non-red pixels exactly. ';
   const prompt = referenceImageUrl
-    ? `${refConstraint}Apply the material and style from the second reference image to the marked areas only. ${maskInstruction}${editPrompt}`
+    ? `${refInstruction}${maskInstruction}${editPrompt}`
     : `${maskInstruction}${editPrompt}`;
 
   const parts: Array<{ text: string } | { inlineData: { mimeType: string; data: string } }> = [
@@ -220,11 +220,7 @@ export async function processJob(
       );
     }
 
-    const fullPrompt = buildPrompt(prompt, projectType, true, {
-      sampleIndex: 0,
-      sampleName: samples[0]?.name || 'Sample 1',
-      colorName: 'red',
-    });
+    const fullPrompt = buildPrompt(prompt, projectType, true);
     const refUrl = samples[0]?.url?.trim() || null;
     const dataUrl = await runGeminiNanoBananaInpaint(geminiApiKey, baseUrl, maskUrl, fullPrompt, refUrl);
     lastResultB64 = dataUrl.replace(/^data:image\/\w+;base64,/, '');
